@@ -5,6 +5,7 @@ import { useHandInput } from './input/useHandInput'
 import { useKeyboardInput } from './input/useKeyboardInput'
 import { usePointerInput } from './input/usePointerInput'
 import { LabelLayer } from './orb/LabelLayer'
+import { NeuralScene } from './neural/NeuralScene'
 import { OrbScene } from './orb/Orb'
 import { Reticle } from './orb/Reticle'
 import { motionPrefs } from './config/feel'
@@ -78,6 +79,18 @@ export default function App() {
     [],
   )
 
+  // Neural port (ORB_NEURAL_PORT_SPEC §0): the star network IS the rendered
+  // object as of Slice P5. The globe build stays reachable at ?scene=globe
+  // for side-by-side gates; ?chrome=0 hides overlays for screenshot gates.
+  const neural = useMemo(
+    () => new URLSearchParams(window.location.search).get('scene') !== 'globe',
+    [],
+  )
+  const hideChrome = useMemo(
+    () => import.meta.env.DEV && new URLSearchParams(window.location.search).get('chrome') === '0',
+    [],
+  )
+
   return (
     <div className="app">
       <div
@@ -88,7 +101,12 @@ export default function App() {
         aria-label="Report orb. Arrow keys move between reports and orbits, Enter opens the focused report."
       >
         <Canvas
-          camera={{ fov: 40, position: [0, 0, 8.2], near: 0.1, far: 100 }}
+          camera={
+            neural
+              ? { fov: 52, position: [0, 0, 2000], near: 1, far: 20000 }
+              : { fov: 40, position: [0, 0, 8.2], near: 0.1, far: 100 }
+          }
+          flat={neural}
           gl={{ antialias: true, alpha: true }}
           dpr={[1, 2]}
           onCreated={({ gl }) => {
@@ -100,15 +118,19 @@ export default function App() {
             })
           }}
         >
-          <OrbScene bus={bus} />
+          {neural ? <NeuralScene bus={bus} /> : <OrbScene bus={bus} />}
         </Canvas>
       </div>
-      <LabelLayer />
-      <Reticle bus={bus} />
-      <OrbitIndex bus={bus} />
+      {!hideChrome && (
+        <>
+          <LabelLayer />
+          <Reticle bus={bus} />
+          <OrbitIndex bus={bus} />
+          <CameraConsent />
+          <Telemetry />
+        </>
+      )}
       <ReportPanel />
-      <CameraConsent />
-      <Telemetry />
       <FocusAnnouncer />
       <FeelPanel hidden={hideTune} />
     </div>

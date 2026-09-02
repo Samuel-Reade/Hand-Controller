@@ -17,7 +17,8 @@
   "overrides": [
     {
       "files": [
-        "src/orb/Orb.tsx"
+        "src/orb/Orb.tsx",
+        "src/neural/**"
       ],
       "rules": {
         "react/immutability": "off"
@@ -25,6 +26,8 @@
     }
   ],
   "ignorePatterns": [
-    "public/mediapipe/**"
+    "public/mediapipe/**",
+    "reference/**",
+    "POC F Ref /**"
   ]
 }

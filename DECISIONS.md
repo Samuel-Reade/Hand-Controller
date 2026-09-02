@@ -43,3 +43,14 @@ One line per choice the spec didn't dictate (or dictated loosely).
 ## Environment hardening (post-crash)
 - The project lives in an iCloud-synced Desktop on a nearly full disk; iCloud "Optimize Mac Storage" evicted file contents out from under the dev server (dataless files whose reads hang), which is what crashed the site. node_modules is symlinked to node_modules.nosync (excluded from iCloud sync); evicted project files were regenerated in place.
 - vite watcher debounced (awaitWriteFinish) against sync-driven event storms; changes to Orb.tsx full-reload instead of HMR-remounting the Canvas (WebGL context leak protection); a lost WebGL context recovers with one automatic reload.
+
+## Neural port (P0-P6)
+- The globe was replaced by the Figma Make neural star-network per
+  ORB_NEURAL_PORT_SPEC.md. Every choice, ground-truth correction (C1-C5)
+  and missing-spec assumption is logged in PORT_LOG.md - single home, one
+  entry per slice, rather than duplicating here. Frozen layers (gesture
+  machine, physics, input bus, DOM/dashboard) carry zero diffs; the neural
+  renderer lives in src/neural/ and registers its leva groups from inside
+  the scene so FeelPanel.tsx stays untouched. ?scene=globe keeps the globe
+  reachable for side-by-side; scripts/verify-neural.mjs re-runs the
+  machine gates.
