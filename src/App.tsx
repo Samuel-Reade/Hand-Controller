@@ -8,7 +8,7 @@ import { LabelLayer } from './orb/LabelLayer'
 import { NeuralScene } from './neural/NeuralScene'
 import { OrbScene } from './orb/Orb'
 import { Reticle } from './orb/Reticle'
-import { motionPrefs } from './config/feel'
+import { FEEL, motionPrefs } from './config/feel'
 import { useStore } from './store'
 import { CameraConsent } from './ui/CameraConsent'
 import { FeelPanel } from './ui/FeelPanel'
@@ -16,6 +16,15 @@ import { FocusAnnouncer } from './ui/FocusAnnouncer'
 import { OrbitIndex } from './ui/OrbitIndex'
 import { ReportPanel } from './ui/ReportPanel'
 import { Telemetry } from './ui/Telemetry'
+
+// Dev-only: ?zoomDrill=0 runs the two-hand zoom as a pure camera dolly that never
+// drills (ORB_ZOOM_SPEC zoomCommitsDrill=false, the human-gate fork) - set at
+// module load so the leva checkbox reflects it.
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  if (new URLSearchParams(window.location.search).get('zoomDrill') === '0') {
+    FEEL.zoomCommitsDrill = false
+  }
+}
 
 export default function App() {
   const bus = useMemo(() => createInputBus(), [])

@@ -1,9 +1,10 @@
 // Camera consent + hand-tracking feedback (S9, S11). Never a permission
 // prompt on load, never a modal wall: the orb works immediately and the
 // user opts into hand control with one click. While tracking runs, the user
-// sees what the tracker sees: a live mirrored thumbnail with the 21
-// landmarks, plus hand / pinch state - without it every tracking failure
-// reads as the app being broken.
+// sees what the tracker sees: a live mirrored thumbnail with both hands'
+// landmarks, colour-coded by pinch / two-pinch-zoom state - without it every
+// tracking failure reads as the app being broken. The synthetic harness
+// (?input=synthetic) draws into the same HUD so screenshots show it too.
 
 import { useEffect, useState } from 'react'
 import { HAND_MIN_VIEWPORT, handControl, handRuntime } from '../input/useHandInput'
@@ -26,14 +27,25 @@ export function CameraConsent() {
   const status = useStore((s) => s.handStatus)
   const present = useStore((s) => s.handPresent)
   const engaged = useStore((s) => s.handEngaged)
+  const count = useStore((s) => s.handCount)
+  const zoom = useStore((s) => s.handZoom)
+  const synthetic = useStore((s) => s.inputMode === 'synthetic')
   const wide = useViewportWide()
 
   // Pointer-only below the responsive cutoff, and without getUserMedia the
   // affordance simply is not offered - the app never gates on a camera.
-  if (!wide || !navigator.mediaDevices?.getUserMedia) return null
+  if (!synthetic && (!wide || !navigator.mediaDevices?.getUserMedia)) return null
 
-  if (status === 'on') {
-    const state = engaged ? 'PINCH' : present ? 'HAND' : 'SEARCHING'
+  if (status === 'on' || synthetic) {
+    const state = zoom
+      ? 'ZOOM'
+      : engaged
+        ? 'PINCH'
+        : present
+          ? count === 2
+            ? 'HANDS'
+            : 'HAND'
+          : 'SEARCHING'
     return (
       <div className="hand-hud">
         <canvas
@@ -48,9 +60,13 @@ export function CameraConsent() {
           <span className="hand-state" data-state={state.toLowerCase()}>
             {state}
           </span>
-          <button type="button" className="hand-link" onClick={() => handControl.stop()}>
-            DISABLE
-          </button>
+          {synthetic ? (
+            <span className="hand-state">SYNTHETIC</span>
+          ) : (
+            <button type="button" className="hand-link" onClick={() => handControl.stop()}>
+              DISABLE
+            </button>
+          )}
         </div>
       </div>
     )
@@ -64,7 +80,7 @@ export function CameraConsent() {
             ✋ ENABLE HAND CONTROL
           </button>
           <p className="hand-note">
-            One hand, tracked on this device. Frames never leave this machine.
+            One or two hands, tracked on this device. Frames never leave this machine.
           </p>
         </>
       )}

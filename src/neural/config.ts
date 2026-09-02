@@ -64,6 +64,7 @@ export interface NeuralConfig {
     // unavailable (document missing); these defaults are the port's own,
     // flagged in PORT_LOG for reconciliation when the spec surfaces.
     recenterDuration: number   // ms - drill-in/out recenter animation
+    recenterPush: number       // wu - the drilled anchor is pushed this much toward the camera
     childShellRadius: number   // wu - report re-shell radius around the anchor
     anchorWinsBelow: number    // reticle: anchor is the candidate below this w
     affordanceLift: number     // halo lift on the reticle candidate
@@ -113,6 +114,7 @@ export const NCONF: NeuralConfig = {
   anchor: { brainDiam: 180, coronaMult: 1.6, spikeLength: 0.42 },
   select: {
     recenterDuration: 650,
+    recenterPush: 900,
     childShellRadius: 260,
     anchorWinsBelow: 0.92,
     affordanceLift: 0.35,

@@ -30,6 +30,13 @@ import {
 import { FEEL } from '../config/feel'
 import { ORBITS } from '../data/orbits'
 import type { InputBus } from '../input/InputBus'
+import {
+  applyZoomEvent,
+  commitZoomView,
+  createZoomView,
+  stepZoomView,
+  zoomRuntime,
+} from '../input/zoomView'
 import { nearestOrbitIndex, rotateYawPitch } from '../orb/geometry'
 import type { Vec3 } from '../orb/geometry'
 import { orbRuntime, stepPhysics, useOrbPhysics } from '../orb/useOrbPhysics'
@@ -65,6 +72,9 @@ declare global {
       seed: number
       tupleHash: string
       level: number
+      target: number
+      zoom: number
+      handCount: number
       anchorHub: number | null
       candidate: string | null
     }
@@ -290,6 +300,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
 
   useControls('neural select', {
     recenterDuration: slider(() => NCONF.select.recenterDuration, (v) => { NCONF.select.recenterDuration = v }, 150, 2000, 10),
+    recenterPush: slider(() => NCONF.select.recenterPush, (v) => { NCONF.select.recenterPush = v }, 0, 1500, 10),
     childShellRadius: slider(() => NCONF.select.childShellRadius, (v) => { NCONF.select.childShellRadius = v }, 100, 600, 5),
     anchorWinsBelow: slider(() => NCONF.select.anchorWinsBelow, (v) => { NCONF.select.anchorWinsBelow = v }, 0.5, 0.99, 0.01),
     affordanceLift: slider(() => NCONF.select.affordanceLift, (v) => { NCONF.select.affordanceLift = v }, 0, 1, 0.01),
@@ -403,62 +414,101 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     focusedItem: -1,
   })
 
-  // Drill transitions. Tap reuses the existing gesture vocabulary only:
-  // the frozen App listener opens the focused report on the same event;
-  // at level 0 (and when the anchor holds the reticle) the store focus is
-  // null so that path no-ops and the tap drives navigation instead.
+  // Two-hand zoom view (ORB_ZOOM_SPEC): pure model, stepped in useFrame.
+  const zoomView = useRef(createZoomView()).current
+
+  // Drill transitions. Two entry points share ONE path:
+  //  - tap reuses the existing gesture vocabulary only: the frozen App
+  //    listener opens the focused report on the same event; at level 0 (and
+  //    when the anchor holds the reticle) the store focus is null so that
+  //    path no-ops and the tap drives navigation instead;
+  //  - the two-hand zoom commit (ORB_ZOOM_SPEC section 3) fires the SAME
+  //    transition on the reticle-focused hub (in) or the anchor (out). It
+  //    never opens a report and never drills past the two levels.
+  // Continuous zoom events feed the pure zoom view; useFrame does the dolly.
   useEffect(() => {
+    const d = drill.current
+    const progressNow = () => {
+      const k = easeInOutCubic(d.k)
+      return d.target === 1 ? k : 1 - k
+    }
+    const drillIn = (hubIndex: number) => {
+      const hubNode = built.hubNodes[hubIndex]
+      const orbitIndex = hubOrbitIndex(hubIndex)
+      const [x, y, z] = nodePosition(hubNode)
+      const hubLocal = new Vector3(x, y, z)
+      d.hubNode = hubNode
+      d.hubLocal = hubLocal
+      d.orbitIndex = orbitIndex
+      d.shell = childShell(orbitIndex)
+      d.target = 1
+      d.level = 1
+
+      // Build the child-shell meshes (report stars + anchor trails + role).
+      const reportInstances: StarInstance[] = d.shell.map((item) => ({
+        pos: hubLocal.clone().add(new Vector3(...(item.local as Vec3))),
+        tier: 'node',
+        hue: hubNode.hue,
+      }))
+      const reportMesh = createStarMesh(reportInstances)
+      reportMesh.renderOrder = 5
+      const rSpecs = reportTrailSpecs(hubLocal, hubNode.hue, d.shell)
+      const reportTrails = buildTrailMeshes(rSpecs)
+      reportTrails.core.renderOrder = 4
+      reportTrails.glow.renderOrder = 4
+      const roleMesh = createStarMesh([{ pos: hubLocal.clone(), tier: 'hub', hue: hubNode.hue }])
+      const roleMat = roleMesh.material as ShaderMaterial
+      roleMat.uniforms.uTierMult.value = 1.0
+      roleMat.uniforms.uAnchor.value = 1
+      roleMesh.renderOrder = 11
+      d.reportMesh = reportMesh
+      d.reportTrails = reportTrails
+      d.roleMesh = roleMesh
+      spinRef.current?.add(reportMesh, reportTrails.core, reportTrails.glow, roleMesh)
+
+      // Walk the pitch detent ladder to the category latitude - the same
+      // `step` vocabulary OrbitIndex uses; physics untouched.
+      const p = orbRuntime.physics
+      const lats = [...ORBITS.map((o) => o.latitude)].sort((a, b) => a - b)
+      const rank = (lat: number) => lats.indexOf(lat)
+      const current = ORBITS[nearestOrbitIndex(ORBITS, p.forcedPitch ?? p.pitch)].latitude
+      const delta = rank(ORBITS[orbitIndex].latitude) - rank(current)
+      for (let i = 0; i < Math.abs(delta); i++) {
+        bus.emit({ type: 'step', axis: 'pitch', dir: delta > 0 ? 1 : -1 })
+      }
+    }
+    const reticleHub = () =>
+      resolveReticle(built.hubDirList, orbRuntime.physics.yaw, orbRuntime.physics.pitch)
+
     return bus.on((e) => {
-      if (e.type !== 'tap') return
+      if (e.type === 'zoom') {
+        applyZoomEvent(zoomView, e)
+        return
+      }
+      if (e.type !== 'tap' && e.type !== 'zoomCommit') return
       if (useStore.getState().openReport) return // input suspended while open
-      const d = drill.current
-      if (d.level === 0) {
-        const r = resolveReticle(built.hubDirList, orbRuntime.physics.yaw, orbRuntime.physics.pitch)
-        if (r.index < 0) return
-        const hubNode = built.hubNodes[r.index]
-        const orbitIndex = hubOrbitIndex(r.index)
-        const [x, y, z] = nodePosition(hubNode)
-        d.hubNode = hubNode
-        d.hubLocal = new Vector3(x, y, z)
-        d.orbitIndex = orbitIndex
-        d.shell = childShell(orbitIndex)
-        d.target = 1
-        d.level = 1
-
-        // Build the child-shell meshes (report stars + anchor trails + role).
-        const reportInstances: StarInstance[] = d.shell.map((item) => ({
-          pos: d.hubLocal!.clone().add(new Vector3(...(item.local as Vec3))),
-          tier: 'node',
-          hue: hubNode.hue,
-        }))
-        const reportMesh = createStarMesh(reportInstances)
-        reportMesh.renderOrder = 5
-        const rSpecs = reportTrailSpecs(d.hubLocal, hubNode.hue, d.shell)
-        const reportTrails = buildTrailMeshes(rSpecs)
-        reportTrails.core.renderOrder = 4
-        reportTrails.glow.renderOrder = 4
-        const roleMesh = createStarMesh([
-          { pos: d.hubLocal.clone(), tier: 'hub', hue: hubNode.hue },
-        ])
-        const roleMat = roleMesh.material as ShaderMaterial
-        roleMat.uniforms.uTierMult.value = 1.0
-        roleMat.uniforms.uAnchor.value = 1
-        roleMesh.renderOrder = 11
-        d.reportMesh = reportMesh
-        d.reportTrails = reportTrails
-        d.roleMesh = roleMesh
-        spinRef.current?.add(reportMesh, reportTrails.core, reportTrails.glow, roleMesh)
-
-        // Walk the pitch detent ladder to the category latitude - the same
-        // `step` vocabulary OrbitIndex uses; physics untouched.
-        const p = orbRuntime.physics
-        const lats = [...ORBITS.map((o) => o.latitude)].sort((a, b) => a - b)
-        const rank = (lat: number) => lats.indexOf(lat)
-        const current = ORBITS[nearestOrbitIndex(ORBITS, p.forcedPitch ?? p.pitch)].latitude
-        const delta = rank(ORBITS[orbitIndex].latitude) - rank(current)
-        for (let i = 0; i < Math.abs(delta); i++) {
-          bus.emit({ type: 'step', axis: 'pitch', dir: delta > 0 ? 1 : -1 })
+      if (e.type === 'zoomCommit') {
+        if (e.dir === 'in') {
+          if (d.level === 0) {
+            const r = reticleHub()
+            if (r.index < 0) return
+            drillIn(r.index)
+          } else if (d.target === 0) {
+            d.target = 1 // commit reversed a drill-out in flight: re-drill the same hub
+          } else {
+            return // level 1: zoom-in dollies to zoomMax and stops - tap owns report-open
+          }
+        } else {
+          if (d.level !== 1 || d.target !== 1) return // level 0: dolly to zoomMin and stop
+          d.target = 0
         }
+        commitZoomView(zoomView, progressNow())
+        return
+      }
+      if (d.level === 0) {
+        const r = reticleHub()
+        if (r.index < 0) return
+        drillIn(r.index)
       } else {
         // Level 1: the anchor is the drill-out target (§6). When a report
         // holds the reticle the frozen path opens it; when the anchor holds
@@ -467,7 +517,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         if (r.anchorWins) d.target = 0
       }
     })
-  }, [bus, built])
+  }, [bus, built, zoomView])
 
   useEffect(
     () => () => {
@@ -528,6 +578,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       d.orbitIndex = null
       d.shell = []
     }
+    const push = d.hubLocal ? k * NCONF.select.recenterPush : 0
     if (offsetRef.current) {
       if (d.hubLocal) {
         const hw = rotateYawPitch(
@@ -535,11 +586,25 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
           physics.yaw,
           physics.pitch,
         )
-        offsetRef.current.position.set(-k * hw[0], -k * hw[1], -k * hw[2] + k * 900)
+        offsetRef.current.position.set(-k * hw[0], -k * hw[1], -k * hw[2] + push)
       } else {
         offsetRef.current.position.set(0, 0, 0)
       }
     }
+
+    // Two-hand zoom (ORB_ZOOM_SPEC section 3): the continuous factor dollies
+    // the SCENE CAMERA only - physics and rotation are untouched. The rest
+    // distance is measured to the CURRENT anchor (camera.z at level 0; minus
+    // the recenter push once drilled), so zoomMin/zoomMax mean the same thing
+    // at both levels and zoom-in at level 1 cannot fly inside the anchor. A
+    // commit hands its factor to the recenter above (carry), so the camera
+    // never jumps when the arbiter re-latches to 1.0. A panel open springs back.
+    const store = useStore.getState()
+    if (store.openReport && zoomView.live) zoomView.live = false
+    const zf = stepZoomView(zoomView, delta, d.target === 1 ? k : 1 - k)
+    state.camera.position.z = push + (NCONF.camera.z - push) / zf
+    zoomRuntime.displayed = zf
+    zoomRuntime.level = d.target
 
     // Uniform sync (O(1) - no per-node JS).
     syncStarUniforms(built.starMesh.material as ShaderMaterial)
@@ -582,7 +647,6 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     ;(environment.grain.material as ShaderMaterial).uniforms.uAmount.value = NCONF.render.grainAmount
 
     // ── Selection ─────────────────────────────────────────────────────────
-    const store = useStore.getState()
     let candidate: string | null = null
     if (d.level === 0) {
       // Reticle over the hub shell; affordance rides iState (§7).
@@ -596,12 +660,14 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         d.candidateHubInstance = inst
       }
       candidate = r.index >= 0 ? `hub:${r.index}(${ORBITS[hubOrbitIndex(r.index)].name})` : null
+      zoomRuntime.hubFocused = r.index >= 0
       if (store.focus !== null) useStore.setState({ focus: null })
       if (d.focusedItem !== -1) d.focusedItem = -1
       // hide any report labels left over
     } else {
       const r = resolveLevel1(d.shell, physics.yaw, physics.pitch)
       const idx = r.item ? r.item.itemIndex : -1
+      zoomRuntime.hubFocused = d.target === 0 // mid drill-out: zoom-in re-drills the same hub
       if (d.reportMesh && idx !== d.focusedItem) {
         const attr = d.reportMesh.geometry.getAttribute('iState')
         if (d.focusedItem >= 0) attr.setX(d.focusedItem, 0)
@@ -652,7 +718,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
             if (sx > width / 2 + 8) side = 1
             else if (sx < width / 2 - 8) side = -1
             label.dataset.side = side === 1 ? 'r' : 'l'
-            const camZ = 2000
+            const camZ = state.camera.position.z
             const dist = Math.sqrt(
               (wx + off.x) ** 2 + (wy + off.y) ** 2 + (camZ - (wz + off.z)) ** 2,
             )
@@ -692,6 +758,9 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       seed: built.seed,
       tupleHash: built.tupleHash,
       level: d.level,
+      target: d.target,
+      zoom: zf,
+      handCount: zoomRuntime.handCount,
       anchorHub: d.hubNode ? built.hubNodes.indexOf(d.hubNode) : null,
       candidate,
     }

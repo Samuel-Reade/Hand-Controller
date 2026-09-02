@@ -23,6 +23,8 @@ interface AppState {
   handStatus: HandStatus
   handPresent: boolean
   handEngaged: boolean
+  handCount: number // 0 / 1 / 2 tracked hands (ORB_ZOOM_SPEC HUD)
+  handZoom: boolean // the two-pinch zoom is engaged
   setFocus(focus: FocusRef): void
   openFocused(): void
   closeReport(): void
@@ -30,6 +32,8 @@ interface AppState {
   setHandStatus(handStatus: HandStatus): void
   setHandPresent(handPresent: boolean): void
   setHandEngaged(handEngaged: boolean): void
+  setHandCount(handCount: number): void
+  setHandZoom(handZoom: boolean): void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -39,6 +43,8 @@ export const useStore = create<AppState>((set, get) => ({
   handStatus: 'off',
   handPresent: false,
   handEngaged: false,
+  handCount: 0,
+  handZoom: false,
   setFocus: (focus) => set({ focus }),
   openFocused: () => {
     const { focus } = get()
@@ -49,4 +55,6 @@ export const useStore = create<AppState>((set, get) => ({
   setHandStatus: (handStatus) => set({ handStatus }),
   setHandPresent: (handPresent) => set({ handPresent }),
   setHandEngaged: (handEngaged) => set({ handEngaged }),
+  setHandCount: (handCount) => set({ handCount }),
+  setHandZoom: (handZoom) => set({ handZoom }),
 }))

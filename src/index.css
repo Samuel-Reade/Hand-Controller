@@ -249,6 +249,10 @@ body {
   color: var(--ice);
 }
 
+.telemetry .t-zoom[data-state='zoom'] {
+  color: var(--ivory);
+}
+
 /* --- report panel (Slice B) ---------------------------------------------- */
 
 .panel-backdrop {
@@ -550,4 +554,12 @@ body {
 
 .hand-state[data-state='pinch'] {
   color: var(--brass);
+}
+
+.hand-state[data-state='hands'] {
+  color: var(--ice);
+}
+
+.hand-state[data-state='zoom'] {
+  color: var(--ivory);
 }

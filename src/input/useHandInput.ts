@@ -3,23 +3,22 @@
 // Detection runs at camera rate; rendering runs at 60fps; never coupled.
 // MediaPipe loads lazily on first start so the orb pays nothing until the
 // user opts in. Assets are vendored under /public - nothing leaves the device.
+// ORB_ZOOM_SPEC: the landmarker tracks TWO hands; every frame's hand set
+// goes to the multi-hand pipeline (arbiter above the untouched single-hand
+// machine), and the HUD thumbnail shows both hands' landmarks colour-coded
+// by pinch / zoom state.
 
 import { useEffect } from 'react'
 import type { HandLandmarker, NormalizedLandmark } from '@mediapipe/tasks-vision'
 import type { InputBus } from './InputBus'
-import { createHandPipeline } from './gestureMachine'
+import { createMultiHandPipeline } from './handArbiter'
+import { drawHands, handRuntime } from './handThumbnail'
 import { useStore } from '../store'
-import { TOKENS } from '../config/tokens'
+
+export { handRuntime } from './handThumbnail'
 
 export const HAND_MIN_VIEWPORT = 820 // below this, pointer only (S12 Slice D)
 const IDLE_STOP_MS = 20_000 // no hand while idle -> stop camera (S9)
-
-interface HandRuntime {
-  /** HUD registers its thumbnail canvas here; the shell draws into it. */
-  thumbnail: HTMLCanvasElement | null
-}
-
-export const handRuntime: HandRuntime = { thumbnail: null }
 
 /** Module controller so DOM components can start/stop without prop drilling. */
 export const handControl = {
@@ -27,20 +26,17 @@ export const handControl = {
   stop: () => {},
 }
 
-type Connections = { start: number; end: number }[]
-
 export function useHandInput(bus: InputBus): void {
   useEffect(() => {
     let running = false
     let starting = false
     let landmarker: HandLandmarker | null = null
-    let connections: Connections = []
     let video: HTMLVideoElement | null = null
     let stream: MediaStream | null = null
     let timer: ReturnType<typeof setTimeout> | undefined
     let suspended = false
     let lastHandSeen = 0
-    const pipeline = createHandPipeline()
+    const pipeline = createMultiHandPipeline()
 
     const setStatus = (s: Parameters<ReturnType<typeof useStore.getState>['setHandStatus']>[0]) =>
       useStore.getState().setHandStatus(s)
@@ -64,7 +60,7 @@ export function useHandInput(bus: InputBus): void {
         const fileset = await vision.FilesetResolver.forVisionTasks('/mediapipe/wasm')
         const options = {
           baseOptions: { modelAssetPath: '/models/hand_landmarker.task', delegate: 'GPU' as const },
-          numHands: 1,
+          numHands: 2, // ORB_ZOOM_SPEC section 2: two hands, handedness unused
           runningMode: 'VIDEO' as const,
         }
         try {
@@ -76,7 +72,6 @@ export function useHandInput(bus: InputBus): void {
             baseOptions: { ...options.baseOptions, delegate: 'CPU' as const },
           })
         }
-        connections = vision.HandLandmarker.HAND_CONNECTIONS
       } catch {
         starting = false
         stopTracks()
@@ -125,44 +120,48 @@ export function useHandInput(bus: InputBus): void {
     function detect(): void {
       if (!running || !landmarker || !video) return
       const now = performance.now()
-      let landmarks: NormalizedLandmark[] | null = null
+      let hands: NormalizedLandmark[][] = []
       try {
         const result = landmarker.detectForVideo(video, now)
-        landmarks = result.landmarks[0] ?? null
+        hands = result.landmarks
       } catch {
         return // one bad frame is not a state change
       }
-      drawThumbnail(landmarks)
 
       const store = useStore.getState()
       // While a dashboard is open, hand input to the orb is suspended
-      // entirely (S2, LOCKED). Reset so no stale gesture survives the panel.
+      // entirely (S2, LOCKED). Close out whatever was in flight so nothing
+      // stays engaged or zoomed under the panel, then emit nothing.
       if (store.openReport) {
         if (!suspended) {
           suspended = true
-          pipeline.reset()
+          for (const e of pipeline.reset()) bus.emit(e)
         }
       } else {
         if (suspended) {
           suspended = false
           pipeline.reset()
         }
-        for (const e of pipeline.process(landmarks, now)) bus.emit(e)
+        for (const e of pipeline.process(hands, now)) bus.emit(e)
       }
+      drawThumbnail(hands)
 
-      const present = landmarks !== null
+      const present = hands.length > 0
       if (present) lastHandSeen = now
       if (store.handPresent !== present) store.setHandPresent(present)
-      const engaged = pipeline.state.phase === 'engaged'
+      const engaged = pipeline.state.single.phase === 'engaged'
       if (store.handEngaged !== engaged) store.setHandEngaged(engaged)
+      if (store.handCount !== hands.length) store.setHandCount(hands.length)
+      const zooming = pipeline.state.zooming
+      if (store.handZoom !== zooming) store.setHandZoom(zooming)
 
       // Hand missing > 20s while idle: stop the camera, offer re-enable.
-      if (!present && pipeline.state.phase === 'idle' && now - lastHandSeen > IDLE_STOP_MS) {
+      if (!present && !engaged && !zooming && now - lastHandSeen > IDLE_STOP_MS) {
         stop('stopped')
       }
     }
 
-    function drawThumbnail(landmarks: NormalizedLandmark[] | null): void {
+    function drawThumbnail(hands: NormalizedLandmark[][]): void {
       const canvas = handRuntime.thumbnail
       if (!canvas || !video) return
       const ctx = canvas.getContext('2d')
@@ -174,24 +173,13 @@ export function useHandInput(bus: InputBus): void {
       ctx.translate(w, 0)
       ctx.scale(-1, 1)
       ctx.drawImage(video, 0, 0, w, h)
-      if (landmarks) {
-        ctx.strokeStyle = 'rgba(127,178,217,0.8)'
-        ctx.lineWidth = 1
-        for (const c of connections) {
-          const a = landmarks[c.start]
-          const b = landmarks[c.end]
-          ctx.beginPath()
-          ctx.moveTo(a.x * w, a.y * h)
-          ctx.lineTo(b.x * w, b.y * h)
-          ctx.stroke()
-        }
-        ctx.fillStyle = TOKENS.brass
-        for (const p of landmarks) {
-          ctx.beginPath()
-          ctx.arc(p.x * w, p.y * h, 1.6, 0, Math.PI * 2)
-          ctx.fill()
-        }
-      }
+      drawHands(
+        ctx,
+        w,
+        h,
+        hands.map((landmarks, i) => ({ landmarks, pinched: pipeline.pinchedOf(i) })),
+        pipeline.state.zooming,
+      )
       ctx.restore()
     }
 
@@ -202,8 +190,9 @@ export function useHandInput(bus: InputBus): void {
 
     function stop(finalStatus: 'off' | 'stopped' = 'off'): void {
       if (!running && !starting) return
-      // Tracking dropped mid-gesture: freeze and decay, never fling (S11).
-      if (pipeline.state.phase === 'engaged') bus.emit({ type: 'lost' })
+      // Tracking dropped mid-gesture: freeze and decay, never fling (S11);
+      // a zoom in flight springs back.
+      for (const e of pipeline.reset()) bus.emit(e)
       running = false
       starting = false
       clearTimeout(timer)
@@ -212,10 +201,11 @@ export function useHandInput(bus: InputBus): void {
       video?.pause()
       video = null
       stopTracks()
-      pipeline.reset()
       const store = useStore.getState()
       store.setHandPresent(false)
       store.setHandEngaged(false)
+      store.setHandCount(0)
+      store.setHandZoom(false)
       store.setInputMode('pointer')
       setStatus(finalStatus)
     }

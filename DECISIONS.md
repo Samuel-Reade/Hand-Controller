@@ -54,3 +54,48 @@ One line per choice the spec didn't dictate (or dictated loosely).
   the scene so FeelPanel.tsx stays untouched. ?scene=globe keeps the globe
   reachable for side-by-side; scripts/verify-neural.mjs re-runs the
   machine gates.
+
+## Two-hand zoom (Z1-Z3, ORB_ZOOM_SPEC)
+- Bus vocabulary: two new event types as specified - `zoom` is phased
+  (`engage` / `update` / `end`, carrying the factor and the session's commit
+  so far) and `zoomCommit` (`in` / `out`). The frozen physics switch has no
+  default branch, so both fall through untouched; zero diff there.
+- The arbiter (src/input/handArbiter.ts) owns the single-hand machine's
+  state object and only ever resets it through the exported factory; a
+  conversion to zoom ends an engagement by emitting `release` at zero
+  velocity itself. gestureMachine.ts carries zero diff.
+- Hand identity is slot-based (nearest last-known knuckle, two-slot
+  assignment); MediaPipe handedness labels are never read - they flip under
+  the mirror. Filters are NOT reset on dropout, mirroring the single
+  pipeline, so every base scenario emits byte-identical events through the
+  arbiter (asserted per scenario in tests/zoom.test.ts).
+- A hand OPENING ends the zoom immediately; a hand LOST mid-zoom gets the
+  same 6-frame tolerance the single machine gives `lost`, holding the last
+  factor meanwhile. Re-arming the single machine requires every present
+  hand to be open (a hand leaving the frame counts as open).
+- After a commit the arbiter re-latches to 1.0 as specified; the scene
+  carries the pre-commit factor and eases it out with the P5 recenter
+  progress (src/input/zoomView.ts, pure + tested). The spec's bare
+  `restDistance / zoomFactor` would snap the camera back at the drill.
+- Camera distance is measured to the CURRENT anchor: rest = camera.z minus
+  the recenter push once drilled (2000 at level 0, 1100 at level 1). With
+  the spec's fixed 2000, zoomMax at level 1 put the camera ~50wu from the
+  anchor. `select.recenterPush` (900, inline in P5) is now a leva slider.
+- Scenario 3's "ratio 1.3 (below zoomInCommit)" is scripted as FACTOR 1.3
+  (scale ratio 1.127): a scale ratio of 1.3 is factor 1.78, above the
+  commit. Scenarios 1/2 use the literal scale ratios (1.9 / 0.55).
+- asymmetricDepth is compared against zoomIn with zoomCommitsDrill=false so
+  a one-frame difference in commit timing cannot split the trajectories.
+- `pipeline.reset()` returns the closing events: `lost` for an engagement,
+  a zoom `end` for a zoom. Panel-open and camera-stop emit them, so nothing
+  stays engaged or zoomed under a dashboard (previously a keyboard-opened
+  panel left a hand engagement dangling).
+- Dev affordances: `?zoomDrill=0` (zoomCommitsDrill=false at load, the
+  human-gate fork), `?scenario=a,b` plays a list, the synthetic drive draws
+  into the HUD thumbnail and the HUD renders in synthetic mode - the
+  two-hand state is screenshot-able without a camera (scripts/verify-zoom.mjs).
+- `?scene=globe` stays zoom-less: the globe never publishes hubFocused (no
+  commits) and its camera ignores the zoom view. Flagged per spec section 9.
+- ORB_GRAB_SPEC.md is still absent and the grab slices remain in the
+  2026-08-25 stash (they edit the frozen gesture machine); the
+  `fistPlusPinch` harness pose is deferred with them.

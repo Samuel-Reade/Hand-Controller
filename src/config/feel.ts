@@ -25,6 +25,18 @@ export interface FeelConfig {
   snapEpsilon: number  // rad: snap-and-clear a target inside this error...
   snapVelocity: number // ...when speed is under this (rad/s)
   tapMaxTravelPx: number // pointer travel under this is a tap, not a drag
+  // two-handed zoom (ORB_ZOOM_SPEC section 5)
+  zoomGain: number         // ratio^gain - how much apparent-size change becomes zoom
+  zoomMin: number          // clamp on the continuous factor (max zoom-out)
+  zoomMax: number          // clamp (max zoom-in)
+  zoomInCommit: number     // factor >= this at level 0 -> drill in
+  zoomOutCommit: number    // factor <= this at level 1 -> drill out
+  springBack: number       // spring rate (1/s) back to 1.0 on sub-threshold release
+  zoomCutoff: number       // One Euro min cutoff, zoom channel (Hz) - fast motion, low lag
+  zoomBeta: number
+  commitCooldownMs: number // after a commit, ignore re-trigger while hands + camera recenter
+  twoHandFrames: number    // consecutive both-pinched frames to enter zoom
+  zoomCommitsDrill: boolean // false = pure camera dolly, never drills (human-gate fork)
 }
 
 export const FEEL: FeelConfig = {
@@ -47,6 +59,17 @@ export const FEEL: FeelConfig = {
   snapEpsilon: 0.008,
   snapVelocity: 0.30,
   tapMaxTravelPx: 6,
+  zoomGain:         2.2,
+  zoomMin:          0.55,
+  zoomMax:          2.10,
+  zoomInCommit:     1.60,
+  zoomOutCommit:    0.64,
+  springBack:       12.0,
+  zoomCutoff:       6.0,
+  zoomBeta:         0.02,
+  commitCooldownMs: 350,
+  twoHandFrames:    2,
+  zoomCommitsDrill: true,
 }
 
 // prefers-reduced-motion (S11): inertia IS the product, so the coast
