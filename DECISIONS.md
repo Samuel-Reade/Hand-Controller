@@ -99,3 +99,20 @@ One line per choice the spec didn't dictate (or dictated loosely).
 - ORB_GRAB_SPEC.md is still absent and the grab slices remain in the
   2026-08-25 stash (they edit the frozen gesture machine); the
   `fistPlusPinch` harness pose is deferred with them.
+
+## Environment - out of iCloud (2026-09-02)
+- The project no longer lives on the iCloud-synced Desktop; it sits in the
+  home directory (`~/rally-biz-ui`), which is not synced. The
+  `node_modules -> node_modules.nosync` symlink is retired with it: iCloud
+  replaced that symlink with a real directory within minutes of it being
+  recreated, then filled the tree with conflict copies (`node_modules 2`,
+  `node_modules 3`) and dataless placeholders until `tsc` no longer
+  resolved and the editor red-flagged tsconfig.tests.json.
+- Eviction and conflict copies are SEPARATE mechanisms: turning off
+  "Optimize Mac Storage" stops the first, not the second. Only leaving the
+  synced tree fixes both - which is why the nosync symlink was never more
+  than a delay. Evidence: `~/rally-orb-poc` (a pre-git copy of this project
+  from 2026-08-25) sat in the home directory for a week with one clean
+  node_modules and zero duplicates.
+- Specs stay in `~/Desktop/Rally .mds/`; plain markdown survives sync fine.
+- `~/rally-orb-poc` is left in place but is NOT the live repo (no git).

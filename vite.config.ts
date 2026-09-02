@@ -5,14 +5,10 @@ import { defineConfig } from 'vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  server: {
-    watch: {
-      // The project lives in an iCloud-synced folder; sync passes churn file
-      // metadata and can fire spurious watcher events in storms. Debounce so
-      // only real, settled writes trigger HMR.
-      awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
-    },
-  },
+  // The watcher ran with awaitWriteFinish (400ms) while the project lived in
+  // an iCloud-synced folder, to absorb sync-driven event storms. The project
+  // moved out of iCloud (DECISIONS.md, 2026-09-02), so the debounce is gone
+  // and HMR fires on the write again.
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'node',

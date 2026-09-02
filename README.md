@@ -26,5 +26,7 @@ synthetic hand harness (two-hand scenarios: `zoomIn`, `zoomOut`,
 camera dolly that never drills, `?tune=0` hides the tuning panel, `?chrome=0`
 hides overlays. `T` toggles telemetry in prod builds.
 
-Note: `node_modules` is symlinked to `node_modules.nosync` to keep iCloud
-Desktop sync from evicting/churning it.
+Note: keep this project OUT of iCloud-synced folders (Desktop, Documents).
+Sync there evicts file contents and leaves conflict copies (`node_modules 2`,
+`node_modules 3`), which breaks the toolchain; it lives in the home
+directory for that reason. See DECISIONS.md.
