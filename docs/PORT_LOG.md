@@ -8,7 +8,7 @@ Log of corrections and findings from the neural port. Started at Slice P0.
 
 Transfer package assembled under `/reference/` per ORB_NEURAL_PORT_SPEC.md §1.
 Source: `~/Desktop/POC F Ref /Build 3D Prototype/` (Figma Make export).
-`reference/figma-make-build/src/App.tsx` verified byte-identical to the export.
+`/reference/figma-make-build/src/App.tsx` verified byte-identical to the export.
 Image mapping: Make screenshots 7.07.50 PM → `make-screenshot-1.png` (wide field),
 7.08.03 PM → `make-screenshot-2.png` (center/brain — matches spec §3's note that
 the brain reads as "one more star" against the brighter foreground hubs);
@@ -16,7 +16,7 @@ the brain reads as "one more star" against the brighter foreground hubs);
 
 ### Step-zero verification — §5 U-flagged constants vs App.tsx
 
-Every U-flagged value checked against `reference/figma-make-build/src/App.tsx`.
+Every U-flagged value checked against `/reference/figma-make-build/src/App.tsx`.
 
 | Config key | Spec default | App.tsx evidence | Verdict |
 |---|---|---|---|
@@ -105,7 +105,7 @@ depends on (§5 RNG caveat), so they become config keys:
 ### Notes
 
 - Spec-name aliasing: the port spec's "ORB_NEURAL_SPEC.md" is
-  `FIGMA_NEURAL_ORB_SPEC.md` at the repo root (the handoff references it by that
+  `/docs/FIGMA_NEURAL_ORB_SPEC.md` (the handoff references it by the bare
   name). Not renamed; treat as the same document.
 - `ORB_GRAB_SPEC.md` is referenced as existing but is not present in the repo.
   Flagged for the human; does not block P0–P4.
@@ -329,3 +329,130 @@ scripts/verify-neural.mjs gates PASS (60fps, 9 draw calls, layout
 every frozen tree. Outstanding: ORB_NEURAL_SPEC.md + ORB_GRAB_SPEC.md
 remain missing (P5 assumptions flagged above); human gates P1-P6 await a
 person at the running app with leva.
+
+---
+
+# ORB_SELECT_SPEC — Slice PT1: crosshair + highlight (read-only)
+
+Built per ORB_SELECT_SPEC §8. Read-only by construction: the sight and the
+highlight are computed and published, and drive nothing. The P5 reticle,
+its detents and its drill routing are untouched, so `?scene=globe` and the
+neural scene both behave exactly as before apart from the new overlay.
+
+New: `src/neural/pointing.ts` (pure model), `src/neural/Crosshair.tsx`
+(overlay), `NCONF.point` (§5 constants + leva group "neural point (PT1)"),
+`tests/pointing.test.ts` (§7 tests 1–5), `scripts/verify-pointing.mjs`.
+
+## Machine gate — PASS
+
+Tests 1–5 green (20 assertions in `tests/pointing.test.ts`; 111 across the
+suite). `node scripts/verify-pointing.mjs`: no page errors; DOM state always
+agrees with the published highlight; acquired highlights are always inside
+`acquireRadius`; ordinary nodes reachable by rotating; §2 filter live at 56
+targetable of 455; 60fps with pointing running every frame; the globe scene
+never mounts the sight (§0 scope guard). Screenshot:
+`shots/point-pt1-acquired.png`.
+
+## Two spec gaps found and resolved (both need a human ruling)
+
+**1. §1 and §4 contradict each other at the anchor.** §1 locks "nearest
+projected centre wins"; §4 locks "the anchor is always targetable". But the
+anchor sits at the constellation origin, so it projects to EXACTLY screen
+centre at every rotation — distance 0, forever. Read literally the anchor
+wins essentially always: measured 294 of 300 random rotations, and no hub
+could ever be sighted.
+
+Resolved by making the anchor a FALLBACK rather than a competitor: it can
+only be acquired when no ordinary targetable node is inside `acquireRadius`.
+This is exactly the rule P5 already used at level 1
+(`select.anchorWinsBelow`). Sighting the anchor to drill out still works —
+you sight it by rotating so that nothing else is under the sight.
+
+A follow-on bug from the same root: the anchor at distance 0 can never fail
+the release test (`dist > releaseRadius`) and no rival can beat 0 by
+`switchMargin`, so once acquired it latched permanently — measured 0 of 40
+drag samples reaching any other node. The anchor is now held under the
+fallback rule instead of the deadband and yields the moment a node becomes
+acquirable (12 of 40 after the fix). Both are regression-tested.
+
+**2. The report↔node binding did not exist.** §2 defines targetable in terms
+of report-bound nodes and their ancestors, and flags the ~35-of-455 density
+as "inherited from P5's `hub i → orbit (i mod 5)` mapping". P5 never bound
+reports to graph nodes at all — it re-shelled them onto the globe grid at
+level 1 — so the binding had to be written. `bindReports()` in
+`pointing.ts` is the single place it lives: P5's hub→orbit mapping kept, each
+report given exactly ONE host (35 bound, 56 targetable with ancestors,
+matching the density the spec names), dealt round-robin across the hubs
+carrying that orbit. The alternative — every report under every hub carrying
+its orbit — is closer to P5's "reachable through any hub" but quadruples the
+density to 140. Chosen against; flip the one function to change it.
+
+## For the PT1 human gate
+
+- **`acquireRadius: 46` (the §5 default) is tight for this field.** Measured
+  distance from screen centre to the nearest targetable node, over 500
+  rotations: p25 = 46px, median = 75px, p75 = 109px at 900px viewport
+  height (55 / 90 / 131 at 1080px). So the spec default acquires on only
+  ~20–25% of rotations and the anchor fallback covers the rest. Try 90–130
+  on the slider. The spec value is shipped unchanged — this is the gate's
+  call, not the build's.
+- **PT1 is hard to judge with detents still on.** §8 says to overlay the
+  sight while rotation still detents "so it can be judged in isolation", but
+  the detent grid is the old globe's latitude/longitude and has nothing to
+  do with where constellation nodes are — so the settled rotations land
+  where nothing is targetable (22 of 26 keyboard-stepped detent positions
+  fell back to the anchor). Acquisition reads well while rotating; holding a
+  node under the sight is what PT2's free rotation and magnet are for. Judge
+  responsiveness and flicker now; judge "can I hold it" at PT2.
+- **Node swell is deferred.** §3's acquired state is ring + swell + crosshair
+  tighten. Ring and tighten are in. The swell rides the `iState` instanced
+  attribute, which the P5 reticle still owns at level 0 — driving it from
+  pointing too would put two affordances on screen at once during PT1. It
+  lands with PT3 when the reticle model retires.
+
+---
+
+# Camera + controls pass: external view, no drift, persistent zoom
+
+Brief: start outside the system; hand rotate/zoom must not move the view after
+release; zoom infinite within reason with no translation on disengage; rotate
+to any cluster and zoom into it. Constraint: keep every hand mechanic, do not
+restructure the interaction system. Decisions in docs/DECISIONS.md (same date).
+
+## What changed (no gesture machine, arbiter, bus or integrator edits)
+- `src/neural/profile.ts` (new): the neural FEEL profile - detentBelow 0,
+  friction 30, forcedBoost 25, zoomPersist true, zoomCommitsDrill false,
+  zoomMin/zoomMax 0.2/12. Applied at module load; globe untouched.
+- `src/input/zoomView.ts`: `base` term; `applyZoomEvent` folds a released
+  gesture into it when `feel.zoomPersist`; spring-back only when not.
+- `src/neural/config.ts`: camera.z 4600. `src/App.tsx`: Canvas reads NCONF
+  camera, far 60000, applies the profile.
+- `src/neural/NeuralScene.tsx`: subscribes the integrator with
+  point.pitchClampFree via the pure core's own parameter; stepPhysics gets it.
+- `src/ui/FeelPanel.tsx`: friction / zoomMin / zoomMax ranges widened to the
+  profile; zoomPersist toggle.
+- Tests: `tests/profile.test.ts` (new, 9); `tests/zoom.test.ts` +7 for the
+  persistent model, old suites pinned to spring-back. 128 total.
+
+## Machine gate - PASS
+- Unit: 128/128; typecheck + lint clean.
+- `verify-neural.mjs`: all PASS; centre white-clip 0.65% -> 0.13%.
+- `verify-pointing.mjs`: all PASS; ordinary acquisitions 4/26 -> 12/26.
+- In-app probe (Playwright, 1440x900): camera z 4600 confirmed. Drift: hard
+  flick nudged 12.50 deg within 250 ms, then 0.01 deg over the following
+  1.75 s. Zoom: synthetic zoomPeekRelease held 1.273 through release and the
+  1.2 s pause (spring-back would read 1.000), compounded to 1.621 on the
+  harness's next gesture, level stayed 0. Screenshot
+  `shots/view-external-initial.png`.
+
+## For the human gate
+- The flick is now a nudge (~10 deg for a hard throw). That is the literal
+  reading of "does not move after release"; if you want more throw, lower
+  rotation > friction (it is on the slider) - every step down trades back
+  some post-release travel.
+- From 4600 the sprites are ~2.3x smaller than before. That is what
+  "outside the system" costs at rest; the persistent zoom is how you get
+  back in. If the rest view feels too small, camera.z 4234 is the tightest
+  fit that still shows every node.
+- Pitch now reaches +/-94.5 deg; past 90 the field reads inverted, exactly
+  as ORB_SELECT_SPEC §1 accepts.

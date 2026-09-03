@@ -14,7 +14,9 @@ Two things in the request were resolved during spec-writing. Implement these ans
 z is too noisy to drive a zoom. `handScale` (wrist→middle-MCP distance in the image) is already
 computed per hand and is a stable proxy for distance-to-camera: a hand grows in the image as it
 nears the camera and shrinks as it recedes. The zoom driver is the **mean of the two hands'
-`handScale`** relative to its value at engage. Hands grow → zoom in; shrink → zoom out. This is
+`handScale`** relative to its value at engage. The mapping is **inverted** so the gesture
+matches the intent above: hands shrink (pulled back toward you) → zoom in; grow (pushed toward
+the screen) → zoom out. This is
 the only reading of "toward / away from the screen" that does not jitter. `handScale` is a
 magnitude, so the camera mirror (base spec §9) does not affect it and there is no sign subtlety
 on this channel.
@@ -29,6 +31,13 @@ flag, flagged for the human gate. Default is `true`.
 
 ---
 
+> **Superseded in part by `ORB_SELECT_SPEC.md` §6 (not yet built).** That
+> addendum makes zoom a pure camera dolly in the neural scene -
+> `zoomCommitsDrill` false permanently, widened clamps, no commit thresholds
+> or cooldown - and moves drilling to crosshair point-and-confirm. Sections 3
+> (commit) and 7 (Z3) below are inert once it lands; §2's continuous dolly
+> and §4's arbitration stay. The globe scene is unaffected.
+
 ## 1. LOCKED decisions
 
 **LOCKED — the gesture requires BOTH hands pinched.** Two hands, each with pinchRatio below
@@ -42,7 +51,8 @@ When the hand count drops back to one, the existing single-hand behaviour resume
 the hand-off so neither transition emits a garbage event.
 
 **LOCKED — zoom is scale-based and symmetric in log space.** The zoom factor is
-`(meanScale / meanScaleAtEngage) ^ zoomGain`, clamped. Equal-ratio moves in and out feel
+`(meanScale / meanScaleAtEngage) ^ -zoomGain`, clamped (the negative exponent is the
+pull-to-zoom-in inversion). Equal-ratio moves in and out feel
 symmetric because the mapping is multiplicative, not additive. Do not drive zoom from the raw
 pixel difference of hand size; drive it from the ratio.
 
@@ -72,7 +82,7 @@ mirror anyway.
 ```
 meanScale = (handScale_L + handScale_R) / 2
 ratio     = meanScale / meanScaleAtEngage          // 1.0 at the moment both pinches confirm
-zoomRaw   = clamp(zoomMin, zoomMax, ratio ^ zoomGain)
+zoomRaw   = clamp(zoomMin, zoomMax, ratio ^ -zoomGain)   // negative: smaller hands = zoom in
 zoom      = OneEuro(zoomRaw, zoomCutoff, zoomBeta)  // its own filter channel
 ```
 `meanScaleAtEngage` is latched when the two-pinch engages and **re-latched after every commit**
@@ -165,7 +175,7 @@ compete — the arbiter routes by pinched-hand count before either is consulted.
 
 ```ts
 // two-handed zoom
-zoomGain:         2.2,    // ratio^gain — how much apparent-size change becomes zoom
+zoomGain:         2.2,    // ratio^-gain — apparent-size change → zoom (hands back = in)
 zoomMin:          0.55,   // clamp on the continuous factor (max zoom-out)
 zoomMax:          2.10,   // clamp (max zoom-in)
 zoomInCommit:     1.60,   // factor ≥ this at level 0 → drill in
@@ -191,16 +201,18 @@ it's zooming.
 landmark sets at independent positions, scales, and pinch states) and add canonical two-hand
 poses (both-pinched, both-open, one-each). This remains the only camera Claude Code has; camera
 code is not touched until these pass. Depth is scripted by scaling both hands' landmark sets
-about their own centres frame-to-frame (growing = approaching).
+about their own centres frame-to-frame (growing = approaching the camera = zooming out).
 
 Scenarios and required assertions (`tests/zoom.test.ts`):
 
-1. **zoomIn** — both pinched, mean scale grows smoothly to ratio ≈ 1.9 over ~600ms. Assert:
+1. **zoomIn** — both pinched, pulled back: mean scale shrinks smoothly to ratio ≈ 1/1.9 over
+   ~600ms. Assert:
    one zoom engage; `zoomFactor` rises monotonically (post-filter); exactly one
    `zoomCommit('in')` as it crosses `zoomInCommit`; baseline re-latched after.
-2. **zoomOut** — start drilled (level 1), both pinched, mean scale shrinks to ratio ≈ 0.55.
+2. **zoomOut** — start drilled (level 1), both pinched, pushed toward the screen: mean scale
+   grows to ratio ≈ 1/0.55.
    Assert: one `zoomCommit('out')`; none at level 0's floor.
-3. **zoomPeekRelease** — scale grows to ratio 1.3 (below `zoomInCommit`), both hands open.
+3. **zoomPeekRelease** — pull back to factor 1.3 (below `zoomInCommit`), both hands open.
    Assert: zero commits; `zoomFactor` springs back to within 0.02 of 1.0; no drill.
 4. **oneHandNoZoom** — only one hand ever pinched, dragged. Assert: zero zoom events; the
    existing single-hand flick fires exactly as in the base gesture suite (regression).
@@ -212,9 +224,10 @@ Scenarios and required assertions (`tests/zoom.test.ts`):
 7. **bothPinchJitter** — mean scale noisy right around `zoomInCommit` (AR(1) wander per the
    port's realistic-noise decision). Assert: at most one `zoomCommit`, then cooldown holds — no
    commit flicker.
-8. **asymmetricDepth** — hands at handScale 0.06 and 0.12 moving together. Assert: `zoomFactor`
+8. **asymmetricDepth** — hands at handScale 0.12 and 0.24 moving together. Assert: `zoomFactor`
    tracks the mean smoothly, no swing > 10% beyond the symmetric-case trajectory.
-9. **commitCooldown** — a valid zoomIn commit immediately followed by continued growth. Assert:
+9. **commitCooldown** — a valid zoomIn commit immediately followed by continued pull-back.
+   Assert:
    no second commit inside `commitCooldownMs`; the level advanced exactly once.
 
 Wire the pair scenarios into `?input=synthetic&scenario=` and screenshot zoomIn mid-dolly and a

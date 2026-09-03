@@ -13,7 +13,7 @@
 //             holds the reticle the anchor is the candidate and tap drills
 //             back out (§6: the center anchor is the drill-out target).
 // ORB_NEURAL_SPEC.md (authoritative for select.*) is missing - assumptions
-// are flagged in PORT_LOG.md P5.
+// are flagged in docs/PORT_LOG.md P5.
 
 import { useFrame, useThree } from '@react-three/fiber'
 import { useControls } from 'leva'
@@ -39,12 +39,20 @@ import {
 } from '../input/zoomView'
 import { nearestOrbitIndex, rotateYawPitch } from '../orb/geometry'
 import type { Vec3 } from '../orb/geometry'
-import { orbRuntime, stepPhysics, useOrbPhysics } from '../orb/useOrbPhysics'
+import { applyInputEvent, orbRuntime, stepPhysics } from '../orb/useOrbPhysics'
 import { useStore } from '../store'
 import { NCONF, generationTuple, tupleHash } from './config'
 import { buildGraph, layoutHash, nodePosition } from './graph'
 import type { NeuralNode } from './graph'
 import { PAL } from './palette'
+import {
+  candidatesFor,
+  createHighlightState,
+  pointRuntime,
+  projectNode,
+  stepHighlight,
+  targetableNames,
+} from './pointing'
 import { buildPulseMesh, syncPulseUniforms } from './pulses'
 import { childShell, hubDirs, hubOrbitIndex, resolveLevel1, resolveReticle } from './selection'
 import type { ChildShellItem } from './selection'
@@ -77,6 +85,13 @@ declare global {
       handCount: number
       anchorHub: number | null
       candidate: string | null
+      /** ORB_SELECT_SPEC PT1 */
+      pointed: string | null
+      pointedDist: number
+      pointedTier: string
+      targetable: number
+      yaw: number
+      pitch: number
     }
   }
 }
@@ -229,7 +244,21 @@ interface DrillState {
 }
 
 export function NeuralScene({ bus }: { bus: InputBus }) {
-  const physics = useOrbPhysics(bus) // frozen hook: bus events → pure physics
+  // The frozen integrator, subscribed the way useOrbPhysics does it, but with
+  // the pitch clamp the pure core already takes as a parameter: the globe's
+  // PITCH_CLAMP is MAX_ORBIT_LATITUDE + 0.06 (~0.86 rad), a category-grid
+  // limit that leaves this field's polar clusters unreachable.
+  // ORB_SELECT_SPEC §1 LOCKED relaxes it to point.pitchClampFree for the
+  // neural scene only. Nothing in useOrbPhysics.ts changes.
+  const physics = orbRuntime.physics
+  useEffect(
+    () =>
+      bus.on((e) => {
+        orbRuntime.lastEvent = e.type
+        applyInputEvent(orbRuntime.physics, e, ORBITS, NCONF.point.pitchClampFree)
+      }),
+    [bus],
+  )
   const gl = useThree((s) => s.gl)
   const offsetRef = useRef<Group>(null)
   const tiltRef = useRef<Group>(null)
@@ -306,6 +335,21 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     affordanceLift: slider(() => NCONF.select.affordanceLift, (v) => { NCONF.select.affordanceLift = v }, 0, 1, 0.01),
   })
 
+  // ORB_SELECT_SPEC §5: every pointing constant on a slider - these are the
+  // ones the PT1 human gate tunes. acquireRadius' range runs well past the
+  // spec default because this field is sparser than 46px assumes (the
+  // nearest targetable node is a median ~75px away at 900px viewport
+  // height); see the PT1 note in docs/PORT_LOG.md.
+  useControls('neural point (PT1)', {
+    crosshairSize: slider(() => NCONF.point.crosshairSize, (v) => { NCONF.point.crosshairSize = v }, 2, 40, 1),
+    acquireRadius: slider(() => NCONF.point.acquireRadius, (v) => { NCONF.point.acquireRadius = v }, 10, 220, 1),
+    releaseRadius: slider(() => NCONF.point.releaseRadius, (v) => { NCONF.point.releaseRadius = v }, 20, 320, 1),
+    switchMargin: slider(() => NCONF.point.switchMargin, (v) => { NCONF.point.switchMargin = v }, 0, 80, 1),
+    tieBandPx: slider(() => NCONF.point.tieBandPx, (v) => { NCONF.point.tieBandPx = v }, 0, 60, 1),
+    highlightSwell: slider(() => NCONF.point.highlightSwell, (v) => { NCONF.point.highlightSwell = v }, 1, 4, 0.05),
+    ringOpacity: slider(() => NCONF.point.ringOpacity, (v) => { NCONF.point.ringOpacity = v }, 0, 1, 0.01),
+  })
+
   useControls('neural environment', {
     grainEnabled: {
       value: NCONF.render.grainEnabled,
@@ -380,8 +424,15 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     pulseMesh.renderOrder = 3
 
     const hd = hubDirs(nodes)
+    // ORB_SELECT_SPEC §2: the crosshair only acquires report-bound nodes and
+    // their ancestors. Computed once per graph build, never per frame.
+    const targetable = targetableNames(nodes)
+    const nodesByName = new Map(nodes.map((n) => [n.name, n]))
 
     return {
+      nodes,
+      targetable,
+      nodesByName,
       starMesh,
       brainMesh,
       trails,
@@ -416,6 +467,26 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
 
   // Two-hand zoom view (ORB_ZOOM_SPEC): pure model, stepped in useFrame.
   const zoomView = useRef(createZoomView()).current
+
+  // Crosshair highlight (ORB_SELECT_SPEC PT1). Read-only: the state is
+  // published for the overlay and telemetry and drives NOTHING else - the
+  // reticle/detent selection below is untouched until PT2/PT3.
+  const highlight = useRef(createHighlightState())
+
+  // §3 "confirming" is a pinch-down over an acquired node. Purely visual
+  // here: PT1 never selects, so no bus event is consumed or suppressed.
+  useEffect(() => {
+    const off = bus.on((e) => {
+      if (e.type === 'engage') pointRuntime.confirming = true
+      else if (e.type === 'release' || e.type === 'tap' || e.type === 'lost') {
+        pointRuntime.confirming = false
+      }
+    })
+    return () => {
+      off()
+      pointRuntime.confirming = false
+    }
+  }, [bus])
 
   // Drill transitions. Two entry points share ONE path:
   //  - tap reuses the existing gesture vocabulary only: the frozen App
@@ -547,7 +618,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
 
   useFrame((state, delta) => {
     const d = drill.current
-    stepPhysics(physics, delta)
+    stepPhysics(physics, delta, FEEL, ORBITS, NCONF.point.pitchClampFree)
     if (tiltRef.current) tiltRef.current.rotation.x = physics.pitch
     if (spinRef.current) spinRef.current.rotation.y = physics.yaw
 
@@ -645,6 +716,52 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     built.pulseMesh.visible = NCONF.trail.pulseEnabled
     environment.grain.visible = NCONF.render.grainEnabled
     ;(environment.grain.material as ShaderMaterial).uniforms.uAmount.value = NCONF.render.grainAmount
+
+    // ── Crosshair pointing (ORB_SELECT_SPEC §3, PT1) ─────────────────────
+    // Projection -> nearest targetable within tolerance -> hysteresis. The
+    // camera z is the LIVE one (it dollies with zoom) and the offset is the
+    // recenter translation, so the sight stays honest at any zoom or depth.
+    {
+      const off = offsetRef.current
+      const view = {
+        camZ: state.camera.position.z,
+        fovDeg: NCONF.camera.fov,
+        viewportH: state.size.height,
+        offset: off ? ([off.position.x, off.position.y, off.position.z] as Vec3) : undefined,
+      }
+      const cands = candidatesFor(
+        built.nodes,
+        built.targetable,
+        physics.yaw,
+        physics.pitch,
+        view,
+      )
+      const h = stepHighlight(highlight.current, cands)
+      highlight.current = h
+      pointRuntime.name = h.name
+      pointRuntime.dist = h.dist
+      pointRuntime.depth = d.level
+      pointRuntime.targetableCount = built.targetable.size
+      if (h.name) {
+        const node = built.nodesByName.get(h.name)!
+        const p = projectNode(node, physics.yaw, physics.pitch, view)
+        pointRuntime.x = p.x
+        pointRuntime.y = p.y
+        pointRuntime.tier = node.tier
+        pointRuntime.hue = PAL[node.hue].body
+        // The star is a view-space billboard of world size
+        // diam x spriteScale, so its projected RADIUS is half of that
+        // through the same focal term the projection uses.
+        const focal = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
+        const diam =
+          node.tier === 'brain' ? NCONF.anchor.brainDiam : NCONF.render.tierDiam[node.tier]
+        pointRuntime.ringR =
+          ((diam * NCONF.render.spriteScale) / 2) * (focal / p.w) * NCONF.point.highlightSwell
+      } else {
+        pointRuntime.tier = ''
+        pointRuntime.ringR = 0
+      }
+    }
 
     // ── Selection ─────────────────────────────────────────────────────────
     let candidate: string | null = null
@@ -763,6 +880,12 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       handCount: zoomRuntime.handCount,
       anchorHub: d.hubNode ? built.hubNodes.indexOf(d.hubNode) : null,
       candidate,
+      pointed: pointRuntime.name,
+      pointedDist: Math.round(pointRuntime.dist),
+      pointedTier: pointRuntime.tier,
+      targetable: pointRuntime.targetableCount,
+      yaw: physics.yaw,
+      pitch: physics.pitch,
     }
   })
 

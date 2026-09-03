@@ -116,3 +116,118 @@ One line per choice the spec didn't dictate (or dictated loosely).
   node_modules and zero duplicates.
 - Specs stay in `~/Desktop/Rally .mds/`; plain markdown survives sync fine.
 - `~/rally-orb-poc` is left in place but is NOT the live repo (no git).
+
+## Zoom depth mapping inverted (2026-09-02)
+- The zoom driver is now `ratio ^ -zoomGain` (was `ratio ^ zoomGain`).
+  Pushing both pinched hands toward the screen zooms OUT; pulling them back
+  toward your body zooms IN. One line, `stepArbiter` in handArbiter.ts.
+- This makes the code agree with ORB_ZOOM_SPEC's own intent line and its
+  human-gate question ("does pulling toward you read as zoom-in") - the
+  shipped mechanism had the sign backwards against its own spec. The spec's
+  section 2/5 formulas were corrected to match rather than the reverse.
+- Nothing downstream of the driver changed: factor > 1 still means "nearer
+  camera", so the commit thresholds, the spring-back, the carry hand-off and
+  `cameraDistance = restDistance / factor` are all untouched.
+- The pair scenarios in syntheticHand.ts script PHYSICAL depth, so their
+  trajectories were reversed to keep their names true (`zoomIn` now shrinks
+  the hands). Scenarios that shrink start from a larger base scale (0.16,
+  and 0.12/0.24 for asymmetricDepth) so the far end stays trackable against
+  the tracker-noise floor. `scaleRatioFor` is the single inverse and flipped
+  with the driver.
+- Verified direction-sensitive: restoring the positive exponent fails 6 of
+  the zoom tests (scenarios 1, 2, 3, 9 and the dolly fork).
+
+## Specs moved to docs/ (2026-09-02)
+- The six spec/log markdown files live in `docs/` now; only README.md stays
+  at the repo root, where GitHub and editors expect it. `git mv` was used, so
+  history follows each file.
+- Doc-to-doc references inside `docs/` are bare filenames and still resolve -
+  they became siblings. What needed fixing was everything pointing IN from
+  outside: README's index, `see docs/DECISIONS.md` in feel.ts, PORT_LOG.md in
+  NeuralScene.tsx / neural/config.ts, and REFERENCE.md's pointer to PORT_LOG.
+- PORT_LOG's `reference/...` paths were root-anchored (`/reference/...`) since
+  a bare relative path now reads from inside `docs/`.
+- `reference/FIGMA_MAKE_HANDOFF.md` still names `FIGMA_NEURAL_ORB_SPEC.md`
+  bare. Left as-is deliberately: it is a verbatim Figma Make artifact, and
+  PORT_LOG's aliasing note records where the file actually sits.
+
+## Selection model reversal authorized (2026-09-02)
+- `docs/ORB_SELECT_SPEC.md` landed: a fixed screen-center crosshair highlights
+  the nearest targetable node and a pinch-tap confirms; neural-scene rotation
+  becomes free and unbounded. Recorded here because that spec's §0 requires
+  it - it deliberately reverses ORB_BUILD_SPEC §2's LOCKED "rotation is
+  selection - no pointing, no cursor" and its detents on both axes.
+- The reversal is scoped to the neural scene. `?scene=globe` keeps detents,
+  rotation-as-selection and the ±1.1 pitch clamp, and stays the reference
+  build; the two behaviours are to be FEEL profiles over one integrator, not
+  a fork of the physics file.
+- NOT YET BUILT. Slices PT1-PT3 with human gates between them; nothing in
+  src/ implements it. The doc is filed so the contradiction with the base
+  spec is on the record rather than discovered later.
+- Interaction with the zoom spec: §6 there makes `zoomCommitsDrill` false
+  permanently in this scene and widens the dolly clamps. The shipped default
+  is still `true`, so the zoom currently drills - that gap closes at PT3. The
+  §6 direction "pull hands toward you = camera in" already matches the
+  inverted mapping shipped earlier today.
+
+## ORB_SELECT PT1 build decisions (2026-09-02)
+- §5's pointing constants live in `NCONF.point`, not FEEL. The spec files
+  them as "FEEL additions", but its own §0 scope guard makes them
+  neural-scene-only, and NCONF is that scene's leva-wired config. Keeping
+  them out of FEEL leaves the frozen globe tests asserting exactly the FEEL
+  they always did.
+- The anchor is a fallback candidate, not a positional competitor, and is
+  held under that rule rather than the deadband. Forced by a genuine
+  contradiction between the spec's §1 and §4 - see the PT1 section of
+  docs/PORT_LOG.md for the measurements.
+- `bindReports()` in src/neural/pointing.ts is the only place the
+  report↔node binding exists. The spec assumed one already existed; P5's
+  level-1 re-shell is not one. One host per report (35), matching the
+  density §2 names.
+- PT1 ships the spec's `acquireRadius: 46` unchanged even though measurement
+  says this field wants ~90-130. Tuning it is the human gate's call; the
+  slider range covers it.
+
+## External camera, drift-free release, persistent zoom (2026-09-02)
+- The neural scene now runs the SAME frozen integrator on its own FEEL
+  profile (src/neural/profile.ts, applied at module load in App.tsx when
+  `?scene` is not `globe`). This is the "two FEEL profiles over one
+  integrator" pattern ORB_SELECT_SPEC §0 prescribes; useOrbPhysics.ts is not
+  edited and `?scene=globe` keeps the base FEEL byte-for-byte.
+- `detentBelow: 0` disables the FREE detent (it engages only below that
+  speed) without touching detentPull, so keyboard / OrbitIndex `step()`
+  targets - which bypass detentBelow - still work. `forcedBoost: 25` makes
+  that forced spring critically damped against `friction: 30`
+  (2*sqrt(9*25) = 30); at the base boost it was so overdamped a step took
+  ~8 s to snap.
+- `friction: 30` is the drift answer. Coast is v*dt/(1-e^(-f*dt)) (discrete
+  Euler), ~0.085 rad for a 2 rad/s release, gone in ~150 ms. Measured in the
+  app: a hard flick nudged 12.5 deg inside 250 ms, then 0.01 deg over the
+  next 1.75 s. A flick is now a nudge, not a spin - the trade the brief
+  asked for ("does not move the screen after release"). Slider: rotation >
+  friction, range widened to 40.
+- Zoom persists: `FEEL.zoomPersist` (new, default false). When true a
+  released two-hand zoom folds its factor into a running `base` in
+  zoomView.ts instead of springing back to 1.0, so gestures COMPOUND (measured
+  1.273 held flat through release, then 1.273^2 = 1.621 after the next
+  gesture). Spring-back stays the default so the ORB_ZOOM_SPEC suites hold
+  unchanged (pinned with zoomPersist=false in their beforeEach); the neural
+  profile turns it on. Clamps 0.2..12 ("infinite within reason"): camera
+  distance = camera.z / factor, 12x from 4600 is ~380 units, outside the
+  anchor corona.
+- `zoomCommitsDrill: false` in the neural profile - ORB_SELECT_SPEC §6 - a
+  commit's recenter + push was the largest unwanted camera translation a
+  zoom could cause. Zoom is now a pure dolly here.
+- Camera z 2000 -> 4600. The field's outermost node is at r = 1856, so at
+  2000 the camera sat AT the shell looking in ("positioned on the brain").
+  Fitting r = 1856 in the 52 deg vertical fov needs z >= 4234; 4600 leaves
+  ~9% margin. App.tsx now reads NCONF.camera for the Canvas and the far
+  plane is 60000 to cover camera.z / zoomMin.
+- Pitch clamp relaxed to point.pitchClampFree (1.65) for the neural scene by
+  passing the pure core's existing clamp parameter from NeuralScene - the
+  globe's PITCH_CLAMP is MAX_ORBIT_LATITUDE + 0.06 (~0.86 rad), which left
+  polar clusters unreachable. `NCONF.scene.pitchClamp` / `initialPitch` were
+  dead config (never read) before this; still unread, flagged for removal.
+- Side effect worth knowing: from outside, nodes project nearer screen
+  centre, so PT1's acquisition rate over the detent walk rose from 4/26 to
+  12/26 at the unchanged acquireRadius 46.

@@ -137,10 +137,14 @@ export function stepArbiter(
     } else {
       s.zoomMissing = 0
       // Zoom driver (section 2): ratio of the MEAN apparent size to its value
-      // at engage, symmetric in log space, on its own filter channel.
+      // at engage, symmetric in log space, on its own filter channel. The
+      // exponent is NEGATIVE - the depth mapping is inverted on purpose:
+      // pushing the hands toward the screen grows the apparent size
+      // (ratio > 1) and zooms OUT; pulling them back toward you shrinks it
+      // and zooms IN, as though the orb were held between the hands.
       const meanScale = (a.handScale + b.handScale) / 2
       const ratio = meanScale / s.baseline
-      const raw = clamp(feel.zoomMin, feel.zoomMax, ratio ** feel.zoomGain)
+      const raw = clamp(feel.zoomMin, feel.zoomMax, ratio ** -feel.zoomGain)
       s.factor = s.zoomFilter.filter(raw, tS, zoomParams)
       events.push({ type: 'zoom', phase: 'update', factor: s.factor, commit: s.sessionCommit })
 

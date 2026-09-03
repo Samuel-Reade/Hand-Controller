@@ -1,0 +1,12 @@
+{
+  // This project builds with TypeScript 6.x (see package.json devDependencies),
+  // but VSCode ships its own older tsserver - 1.95.3 bundles TS 5.6.3, which
+  // does not know `erasableSyntaxOnly` (added in TS 5.8) and reports TS5023
+  // on tsconfig.app.json / tsconfig.node.json / tsconfig.tests.json even
+  // though `tsc -b` is clean. Point the editor at the project's own compiler.
+  //
+  // VSCode will prompt to allow it on first open; you can also run
+  // "TypeScript: Select TypeScript Version" -> "Use Workspace Version".
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true
+}

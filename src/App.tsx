@@ -5,7 +5,10 @@ import { useHandInput } from './input/useHandInput'
 import { useKeyboardInput } from './input/useKeyboardInput'
 import { usePointerInput } from './input/usePointerInput'
 import { LabelLayer } from './orb/LabelLayer'
+import { NCONF } from './neural/config'
+import { Crosshair } from './neural/Crosshair'
 import { NeuralScene } from './neural/NeuralScene'
+import { applyNeuralFeelProfile } from './neural/profile'
 import { OrbScene } from './orb/Orb'
 import { Reticle } from './orb/Reticle'
 import { FEEL, motionPrefs } from './config/feel'
@@ -23,6 +26,16 @@ import { Telemetry } from './ui/Telemetry'
 if (import.meta.env.DEV && typeof window !== 'undefined') {
   if (new URLSearchParams(window.location.search).get('zoomDrill') === '0') {
     FEEL.zoomCommitsDrill = false
+  }
+}
+
+// The neural scene runs the SAME integrator on its own FEEL profile (no free
+// detent, fast settle, persistent zoom - see neural/profile.ts). Module load,
+// before React mounts, so the leva sliders show the live values. The globe
+// keeps the base FEEL untouched.
+if (typeof window !== 'undefined') {
+  if (new URLSearchParams(window.location.search).get('scene') !== 'globe') {
+    applyNeuralFeelProfile()
   }
 }
 
@@ -112,7 +125,8 @@ export default function App() {
         <Canvas
           camera={
             neural
-              ? { fov: 52, position: [0, 0, 2000], near: 1, far: 20000 }
+              ? // far covers the widest dolly: camera.z / zoomMin (0.2) = 23000
+                { fov: NCONF.camera.fov, position: [0, 0, NCONF.camera.z], near: 1, far: 60000 }
               : { fov: 40, position: [0, 0, 8.2], near: 0.1, far: 100 }
           }
           flat={neural}
@@ -134,6 +148,9 @@ export default function App() {
         <>
           <LabelLayer />
           <Reticle bus={bus} />
+          {/* ORB_SELECT_SPEC §0 scope guard: the sight is neural-scene only;
+              ?scene=globe keeps rotation-as-selection untouched. */}
+          {neural && <Crosshair />}
           <OrbitIndex bus={bus} />
           <CameraConsent />
           <Telemetry />

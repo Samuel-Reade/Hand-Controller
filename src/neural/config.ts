@@ -1,7 +1,7 @@
 // The neural feel-config object (ORB_NEURAL_PORT_SPEC §5). Every constant of
 // the star-network render lives here as a leva-wired default; nothing may be
 // hardcoded at a use site. Defaults verified against the prototype ground
-// truth in PORT_LOG.md (P0 step-zero table). Same discipline as FEEL:
+// truth in docs/PORT_LOG.md (P0 step-zero table). Same discipline as FEEL:
 // leva mutates in place, renderers read live. Generation-affecting keys
 // (the `generation` group) additionally bump `generationVersion` so the
 // graph rebuilds; render keys take effect the next frame via uniforms.
@@ -68,7 +68,35 @@ export interface NeuralConfig {
     childShellRadius: number   // wu - report re-shell radius around the anchor
     anchorWinsBelow: number    // reticle: anchor is the candidate below this w
     affordanceLift: number     // halo lift on the reticle candidate
+    maxDepth: number           // ORB_SELECT_SPEC §5: Infinity = full tree; 1 = P5 two-level cap
   }
+  point: PointConfig
+}
+
+/**
+ * Crosshair pointing + free-rotation profile (ORB_SELECT_SPEC §5). That spec
+ * files these under "FEEL additions", but they are neural-scene-only by its
+ * own scope guard (§0 - the globe keeps detents and rotation-as-selection),
+ * and NCONF is this scene's leva-wired config. Kept here so the globe's FEEL
+ * stays exactly what the frozen globe tests assert.
+ */
+export interface PointConfig {
+  // crosshair + highlight (PT1)
+  crosshairSize: number   // px, arm length - small
+  acquireRadius: number   // px from centre to acquire a node
+  releaseRadius: number   // px to drop the current highlight (hysteresis; > acquire)
+  switchMargin: number    // px a rival must beat the current highlight by to steal it
+  tieBandPx: number       // within this, the nearer-camera node wins
+  highlightSwell: number  // scale multiplier on the acquired node
+  ringOpacity: number
+  // free rotation profile (PT2 - declared now, unused until then)
+  pitchClampFree: number  // rad (~±94.5°); replaces the ±1.1 category clamp
+  magnetStrength: number  // torque toward centering the nearest node
+  magnetSpeedGate: number // rad/s; above this the magnet fades to zero
+  magnetMaxPull: number   // hard cap on magnet angular accel
+  // confirm (PT3)
+  dwellEnabled: boolean   // optional hands-free secondary; never the primary
+  dwellMs: number
 }
 
 export const NCONF: NeuralConfig = {
@@ -108,7 +136,7 @@ export const NCONF: NeuralConfig = {
     radByTier: { brain: 1.8, hub: 1.1, node: 0.65, sub: 0.35, terminal: 0.3 },
     radDefault: 0.3,
   },
-  camera: { z: 2000, fov: 52 },
+  camera: { z: 4600, fov: 52 }, // outside the field: max node r=1856 needs z>=4234 to fit the fov
   scene: { initialPitch: -0.18, pitchClamp: 1.1 },
   brainPulse: { rate: 0.003, amp: 0.06 },
   anchor: { brainDiam: 180, coronaMult: 1.6, spikeLength: 0.42 },
@@ -118,6 +146,22 @@ export const NCONF: NeuralConfig = {
     childShellRadius: 260,
     anchorWinsBelow: 0.92,
     affordanceLift: 0.35,
+    maxDepth: Infinity,
+  },
+  point: {
+    crosshairSize:    7,
+    acquireRadius:   46,
+    releaseRadius:   88,
+    switchMargin:    18,
+    tieBandPx:       10,
+    highlightSwell:   1.6,
+    ringOpacity:      0.9,
+    pitchClampFree:   1.65,
+    magnetStrength:   3.2,
+    magnetSpeedGate:  1.4,
+    magnetMaxPull:    0.35,
+    dwellEnabled:     false,
+    dwellMs:        520,
   },
 }
 

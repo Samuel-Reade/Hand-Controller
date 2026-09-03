@@ -23,7 +23,7 @@ workflow below is designed around that split.
 
 **Deviation policy.** Decisions marked **LOCKED** in §2 are settled — implement them as
 written even if you disagree, and put the objection in your handoff summary. Everything else
-is yours to improve. Keep a `DECISIONS.md` at the repo root: one line per choice you made that
+is yours to improve. Keep a `DECISIONS.md` in `docs/`: one line per choice you made that
 this spec didn't dictate (library picked, structure changed, spec bug fixed). If you find an
 actual error in this spec — a sign flipped, an API misremembered — fix it, and log it there.
 

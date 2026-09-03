@@ -16,17 +16,17 @@ export interface FeelConfig {
   minCutoff: number    // One Euro
   beta: number         // One Euro speed coefficient
   deadZone: number     // normalized units/frame below which motion is ignored
-  pinchCutoff: number  // One Euro min cutoff for pinch distance (Hz) - see DECISIONS.md
+  pinchCutoff: number  // One Euro min cutoff for pinch distance (Hz) - see docs/DECISIONS.md
   pinchClose: number   // ratio to engage
   pinchOpen: number    // ratio to release - must exceed pinchClose (hysteresis)
   tapMaxMs: number
   tapMaxTravel: number // normalized units (hand)
-  // detent snap + pointer tap (promoted from magic numbers - see DECISIONS.md)
+  // detent snap + pointer tap (promoted from magic numbers - see docs/DECISIONS.md)
   snapEpsilon: number  // rad: snap-and-clear a target inside this error...
   snapVelocity: number // ...when speed is under this (rad/s)
   tapMaxTravelPx: number // pointer travel under this is a tap, not a drag
   // two-handed zoom (ORB_ZOOM_SPEC section 5)
-  zoomGain: number         // ratio^gain - how much apparent-size change becomes zoom
+  zoomGain: number         // ratio^-gain - apparent-size change -> zoom (hands back = in)
   zoomMin: number          // clamp on the continuous factor (max zoom-out)
   zoomMax: number          // clamp (max zoom-in)
   zoomInCommit: number     // factor >= this at level 0 -> drill in
@@ -37,6 +37,8 @@ export interface FeelConfig {
   commitCooldownMs: number // after a commit, ignore re-trigger while hands + camera recenter
   twoHandFrames: number    // consecutive both-pinched frames to enter zoom
   zoomCommitsDrill: boolean // false = pure camera dolly, never drills (human-gate fork)
+  zoomPersist: boolean      // true = a released zoom is KEPT (folded into a running base);
+                            // false = ORB_ZOOM_SPEC spring-back to 1.0. Neural profile: true.
 }
 
 export const FEEL: FeelConfig = {
@@ -70,6 +72,7 @@ export const FEEL: FeelConfig = {
   commitCooldownMs: 350,
   twoHandFrames:    2,
   zoomCommitsDrill: true,
+  zoomPersist:      false,
 }
 
 // prefers-reduced-motion (S11): inertia IS the product, so the coast

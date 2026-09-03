@@ -96,6 +96,7 @@ beforeEach(() => {
   FEEL.commitCooldownMs = 350
   FEEL.twoHandFrames = 2
   FEEL.zoomCommitsDrill = true
+  FEEL.zoomPersist = false // these suites assert the ORB_ZOOM_SPEC spring-back contract
 })
 
 describe('one-hand paths are untouched (arbiter regression)', () => {
@@ -332,5 +333,91 @@ describe('zoom view (pure)', () => {
     commitZoomView(v, 0)
     applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: 2.1, commit: 'in' })
     expect(stepZoomView(v, 1 / 60, 0)).toBe(FEEL.zoomMax)
+  })
+})
+
+describe('persistent zoom (neural profile: zoomPersist=true)', () => {
+  beforeEach(() => {
+    FEEL.zoomPersist = true
+    FEEL.zoomCommitsDrill = false
+    FEEL.zoomMin = 0.2
+    FEEL.zoomMax = 12
+  })
+
+  it('a released zoom is kept - no spring-back to 1.0', () => {
+    const v = createZoomView()
+    applyZoomEvent(v, { type: 'zoom', phase: 'engage', factor: 1, commit: 'none' })
+    applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: 1.8, commit: 'none' })
+    expect(stepZoomView(v, 1 / 60, 1)).toBeCloseTo(1.8, 6)
+    applyZoomEvent(v, { type: 'zoom', phase: 'end', factor: 1.8, commit: 'none' })
+    let f = 0
+    for (let i = 0; i < 120; i++) f = stepZoomView(v, 1 / 60, 1) // two seconds
+    expect(f).toBeCloseTo(1.8, 6)
+    expect(v.base).toBeCloseTo(1.8, 6)
+    expect(v.hand).toBe(1)
+  })
+
+  it('gestures compound: the second zoom multiplies onto the first', () => {
+    const v = createZoomView()
+    const gesture = (peak: number) => {
+      applyZoomEvent(v, { type: 'zoom', phase: 'engage', factor: 1, commit: 'none' })
+      applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: peak, commit: 'none' })
+      stepZoomView(v, 1 / 60, 1)
+      applyZoomEvent(v, { type: 'zoom', phase: 'end', factor: peak, commit: 'none' })
+      return stepZoomView(v, 1 / 60, 1)
+    }
+    expect(gesture(2)).toBeCloseTo(2, 6)
+    expect(gesture(1.5)).toBeCloseTo(3, 6)
+    expect(gesture(0.5)).toBeCloseTo(1.5, 6) // zooming back out compounds the same way
+  })
+
+  it('live factor mid-gesture is base x hand, so a new gesture starts from where the last left off', () => {
+    const v = createZoomView()
+    applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: 2, commit: 'none' })
+    applyZoomEvent(v, { type: 'zoom', phase: 'end', factor: 2, commit: 'none' })
+    stepZoomView(v, 1 / 60, 1)
+    applyZoomEvent(v, { type: 'zoom', phase: 'engage', factor: 1, commit: 'none' })
+    expect(stepZoomView(v, 1 / 60, 1)).toBeCloseTo(2, 6) // no jump at engage
+    applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: 1.25, commit: 'none' })
+    expect(stepZoomView(v, 1 / 60, 1)).toBeCloseTo(2.5, 6)
+  })
+
+  it('"infinite within reason": the running base is clamped to [zoomMin, zoomMax]', () => {
+    const v = createZoomView()
+    for (let i = 0; i < 6; i++) {
+      applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: 3, commit: 'none' })
+      applyZoomEvent(v, { type: 'zoom', phase: 'end', factor: 3, commit: 'none' })
+    }
+    expect(stepZoomView(v, 1 / 60, 1)).toBe(FEEL.zoomMax)
+    expect(v.base).toBe(FEEL.zoomMax)
+    for (let i = 0; i < 12; i++) {
+      applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: 0.3, commit: 'none' })
+      applyZoomEvent(v, { type: 'zoom', phase: 'end', factor: 0.3, commit: 'none' })
+    }
+    expect(stepZoomView(v, 1 / 60, 1)).toBe(FEEL.zoomMin)
+  })
+
+  it('through the real pipeline: zoomPeekRelease keeps its peak instead of settling to 1', () => {
+    const s = run('zoomPeekRelease')
+    expect(commits(s)).toHaveLength(0)
+    const peak = Math.max(...zooms(s, 'update').map((u) => u.e.factor))
+    expect(peak).toBeGreaterThan(1.15)
+    const settled = settleView(s)
+    expect(Math.abs(settled - 1)).toBeGreaterThan(0.1) // NOT sprung back
+    // the last live factor is what the camera keeps
+    const updates = zooms(s, 'update')
+    expect(settled).toBeCloseTo(updates[updates.length - 1].e.factor, 3)
+  })
+
+  it('a full zoomIn dolly runs past the old 2.1 ceiling and never drills', () => {
+    const s = run('zoomIn')
+    expect(commits(s)).toHaveLength(0)
+    expect(Math.max(...zooms(s, 'update').map((u) => u.e.factor))).toBeGreaterThan(2.1)
+  })
+
+  it('zoomPersist=false is byte-for-byte the old contract (spring back within 0.02)', () => {
+    FEEL.zoomPersist = false
+    const s = run('zoomPeekRelease')
+    expect(Math.abs(settleView(s) - 1)).toBeLessThan(0.02)
   })
 })

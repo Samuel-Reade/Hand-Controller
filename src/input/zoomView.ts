@@ -1,9 +1,17 @@
 // Scene-side zoom model (ORB_ZOOM_SPEC section 3) - pure, so the spring-back
 // and the commit hand-off run headless in tests. The active scene applies
 // the bus zoom events, steps it once per frame and maps the result to camera
-// distance: cameraDistance = restDistance / factor (bigger hands -> factor
-// > 1 -> nearer camera -> zoom in). Two multiplicative parts:
+// distance: cameraDistance = restDistance / factor (factor > 1 -> nearer
+// camera -> zoom in). The arbiter yields factor > 1 for SMALLER hands, i.e.
+// hands pulled back toward you - see handArbiter. Three multiplicative parts:
+//   base  - zoom kept from earlier gestures (feel.zoomPersist). Each two-hand
+//           gesture starts at hand = 1 relative to its own engage size, so
+//           "infinite" zoom is the PRODUCT of gestures: on release the hand
+//           factor folds into base and the camera stays exactly where the
+//           hands left it. With zoomPersist false, base stays 1 and the
+//           original ORB_ZOOM_SPEC spring-back contract holds.
 //   hand  - the arbiter's live factor; springs back to 1.0 once released
+//           (only when not persisting)
 //   carry - commit hand-off: the arbiter re-latches to 1.0 at a commit, so
 //           the pre-commit factor is carried and eased out ALONGSIDE the P5
 //           recenter animation - the camera never jumps at the drill
@@ -16,6 +24,8 @@ import type { FeelConfig } from '../config/feel'
 import type { InputEvent } from './InputBus'
 
 export interface ZoomView {
+  /** zoom kept from earlier gestures (1 unless feel.zoomPersist) */
+  base: number
   /** the arbiter's factor (last received while live, springing after) */
   hand: number
   /** a two-hand zoom is in progress */
@@ -29,13 +39,26 @@ export interface ZoomView {
   factor: number
 }
 
+const clamp = (lo: number, hi: number, x: number) => Math.min(hi, Math.max(lo, x))
+
 export function createZoomView(): ZoomView {
-  return { hand: 1, live: false, carry: 1, carryFrom: 1, progress0: 1, factor: 1 }
+  return { base: 1, hand: 1, live: false, carry: 1, carryFrom: 1, progress0: 1, factor: 1 }
 }
 
-export function applyZoomEvent(v: ZoomView, e: Extract<InputEvent, { type: 'zoom' }>): void {
+export function applyZoomEvent(
+  v: ZoomView,
+  e: Extract<InputEvent, { type: 'zoom' }>,
+  feel: FeelConfig = FEEL,
+): void {
   if (e.phase === 'end') {
     v.live = false
+    if (feel.zoomPersist) {
+      // Keep what the hands did: fold the gesture into the running base
+      // (clamped so base itself never leaves the dolly range) and reset the
+      // hand so there is nothing left to spring.
+      v.base = clamp(feel.zoomMin, feel.zoomMax, v.base * v.hand)
+      v.hand = 1
+    }
   } else {
     v.live = true
     v.hand = e.factor
@@ -56,7 +79,6 @@ export function commitZoomView(v: ZoomView, progressNow: number): void {
   v.hand = 1
 }
 
-const clamp = (lo: number, hi: number, x: number) => Math.min(hi, Math.max(lo, x))
 
 /**
  * One frame. `progress` is the eased 0..1 progress of the active scene's
@@ -74,11 +96,11 @@ export function stepZoomView(
     const t = span <= 1e-6 ? 1 : clamp(0, 1, (progress - v.progress0) / span)
     v.carry = t >= 1 ? 1 : v.carryFrom + (1 - v.carryFrom) * t
   }
-  if (!v.live && v.hand !== 1 && dt > 0) {
+  if (!feel.zoomPersist && !v.live && v.hand !== 1 && dt > 0) {
     v.hand += (1 - v.hand) * (1 - Math.exp(-feel.springBack * dt))
     if (Math.abs(v.hand - 1) < 1e-4) v.hand = 1
   }
-  v.factor = clamp(feel.zoomMin, feel.zoomMax, v.hand * v.carry)
+  v.factor = clamp(feel.zoomMin, feel.zoomMax, v.base * v.hand * v.carry)
   return v.factor
 }
 

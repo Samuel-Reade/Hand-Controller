@@ -25,7 +25,7 @@ function slider(key: NumKey, min: number, max: number, step: number) {
 export function FeelPanel({ hidden }: { hidden: boolean }) {
   useControls('rotation', {
     dragGain: slider('dragGain', 0.001, 0.02, 0.0005),
-    friction: slider('friction', 0.2, 8, 0.05),
+    friction: slider('friction', 0.2, 40, 0.05), // neural profile sits at 30 (no coast drift)
     detentPull: slider('detentPull', 0.5, 30, 0.25),
     detentBelow: slider('detentBelow', 0, 6, 0.05),
     forcedBoost: slider('forcedBoost', 1, 6, 0.1),
@@ -51,8 +51,8 @@ export function FeelPanel({ hidden }: { hidden: boolean }) {
   // fork, not a tuning knob: off = pure camera dolly that never drills.
   useControls('zoom', {
     zoomGain: slider('zoomGain', 0.5, 5, 0.05),
-    zoomMin: slider('zoomMin', 0.3, 1, 0.01),
-    zoomMax: slider('zoomMax', 1, 4, 0.05),
+    zoomMin: slider('zoomMin', 0.1, 1, 0.01),
+    zoomMax: slider('zoomMax', 1, 16, 0.05),
     zoomInCommit: slider('zoomInCommit', 1.05, 3, 0.05),
     zoomOutCommit: slider('zoomOutCommit', 0.3, 0.95, 0.01),
     springBack: slider('springBack', 1, 40, 0.5),
@@ -60,6 +60,12 @@ export function FeelPanel({ hidden }: { hidden: boolean }) {
     zoomBeta: slider('zoomBeta', 0, 0.2, 0.005),
     commitCooldownMs: slider('commitCooldownMs', 0, 1500, 10),
     twoHandFrames: slider('twoHandFrames', 1, 6, 1),
+    zoomPersist: {
+      value: FEEL.zoomPersist,
+      onChange: (v: boolean) => {
+        FEEL.zoomPersist = v
+      },
+    },
     zoomCommitsDrill: {
       value: FEEL.zoomCommitsDrill,
       onChange: (v: boolean) => {

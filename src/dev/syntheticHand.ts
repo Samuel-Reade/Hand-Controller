@@ -4,7 +4,8 @@
 // Harness v3 (ORB_ZOOM_SPEC section 6): a second hand. Pair scenarios emit
 // two independent landmark sets per frame (own position, scale, pinch state,
 // own tracker-noise stream); depth is scripted by scaling each hand about
-// its own centre frame to frame (growing = approaching the camera).
+// its own centre frame to frame (growing = approaching the camera, which
+// zooms OUT - the depth mapping is inverted; see handArbiter).
 
 import type { InputEvent, InputBus } from '../input/InputBus'
 import { FEEL } from '../config/feel'
@@ -337,37 +338,42 @@ const depth = (frames: number, r0: number, r1: number, sa = S, sb = S): PairSegm
   at: (p) => pairPose.bothPinched(r0 + (r1 - r0) * p, sa, sb),
 })
 
-/** The mean-scale ratio that yields a given zoom factor at the live zoomGain. */
-export const scaleRatioFor = (factor: number, gain = FEEL.zoomGain): number => factor ** (1 / gain)
+/** The mean-scale ratio that yields a given zoom factor at the live zoomGain.
+ *  Inverted with the driver: a factor above 1 needs hands SMALLER than at
+ *  engage, i.e. pulled back toward you. */
+export const scaleRatioFor = (factor: number, gain = FEEL.zoomGain): number =>
+  factor ** (-1 / gain)
 
 export const pairScenarios: Record<string, () => SyntheticPairFrame[]> = {
-  /** 1. zoomIn: both pinched, mean scale grows smoothly to ratio 1.9 over ~600ms. */
+  /** 1. zoomIn: both pinched, pulled back toward you - mean scale SHRINKS
+   *  smoothly to ratio 1/1.9 over ~600ms. */
   zoomIn: () =>
     buildPair(
       [
-        holdPair(9, pairPose.bothOpen()),
-        holdPair(4, pairPose.bothPinched()),
-        depth(18, 1, 1.9),
-        holdPair(6, pairPose.bothOpen(1.9)),
+        holdPair(9, pairPose.bothOpen(1, 0.16, 0.16)),
+        holdPair(4, pairPose.bothPinched(1, 0.16, 0.16)),
+        depth(18, 1, 1 / 1.9, 0.16, 0.16),
+        holdPair(6, pairPose.bothOpen(1 / 1.9, 0.16, 0.16)),
       ],
       201,
       0.0004,
     ),
 
-  /** 2. zoomOut: (run at level 1) both pinched, mean scale shrinks to ratio 0.55. */
+  /** 2. zoomOut: (run at level 1) both pinched, pushed toward the screen -
+   *  mean scale grows to ratio 1/0.55. */
   zoomOut: () =>
     buildPair(
       [
-        holdPair(9, pairPose.bothOpen(1, 0.16, 0.16)),
-        holdPair(4, pairPose.bothPinched(1, 0.16, 0.16)),
-        depth(18, 1, 0.55, 0.16, 0.16),
-        holdPair(6, pairPose.bothOpen(0.55, 0.16, 0.16)),
+        holdPair(9, pairPose.bothOpen()),
+        holdPair(4, pairPose.bothPinched()),
+        depth(18, 1, 1 / 0.55),
+        holdPair(6, pairPose.bothOpen(1 / 0.55)),
       ],
       202,
       0.0004,
     ),
 
-  /** 3. zoomPeekRelease: grows to FACTOR 1.3 (below zoomInCommit), both open. */
+  /** 3. zoomPeekRelease: pulls back to FACTOR 1.3 (below zoomInCommit), both open. */
   zoomPeekRelease: () => {
     const r = scaleRatioFor(1.3)
     return buildPair(
@@ -428,9 +434,9 @@ export const pairScenarios: Record<string, () => SyntheticPairFrame[]> = {
       [
         holdPair(9, pairPose.bothOpen()),
         holdPair(4, pairPose.bothPinched()),
-        depth(10, 1, 1.08),
-        { frames: 20, at: () => [pose(AX, CY, S * 1.08, CLOSED_RATIO), null] },
-        holdPair(6, pairPose.bothOpen(1.08)),
+        depth(10, 1, 1 / 1.08),
+        { frames: 20, at: () => [pose(AX, CY, S / 1.08, CLOSED_RATIO), null] },
+        holdPair(6, pairPose.bothOpen(1 / 1.08)),
       ],
       206,
       0.0004,
@@ -453,7 +459,7 @@ export const pairScenarios: Record<string, () => SyntheticPairFrame[]> = {
       [
         holdPair(9, pairPose.bothOpen()),
         holdPair(4, pairPose.bothPinched()),
-        depth(6, 1, rc * 0.97),
+        depth(6, 1, rc * 1.03),
         { frames: 90, at: (p) => pairPose.bothPinched(rc * (1 + wander[Math.round(p * 89)])) },
         holdPair(6, pairPose.bothOpen(rc)),
       ],
@@ -462,29 +468,29 @@ export const pairScenarios: Record<string, () => SyntheticPairFrame[]> = {
     )
   },
 
-  /** 8. asymmetricDepth: hands at handScale 0.06 and 0.12 moving together
-   *  (the zoomIn ratio trajectory). */
+  /** 8. asymmetricDepth: hands at handScale 0.12 and 0.24 moving together
+   *  (the zoomIn ratio trajectory - pulling back to 0.06 and 0.12). */
   asymmetricDepth: () =>
     buildPair(
       [
-        holdPair(9, pairPose.bothOpen(1, 0.06, 0.12)),
-        holdPair(4, pairPose.bothPinched(1, 0.06, 0.12)),
-        depth(18, 1, 1.9, 0.06, 0.12),
-        holdPair(6, pairPose.bothOpen(1.9, 0.06, 0.12)),
+        holdPair(9, pairPose.bothOpen(1, 0.12, 0.24)),
+        holdPair(4, pairPose.bothPinched(1, 0.12, 0.24)),
+        depth(18, 1, 1 / 1.9, 0.12, 0.24),
+        holdPair(6, pairPose.bothOpen(1 / 1.9, 0.12, 0.24)),
       ],
       209,
       0.0004,
     ),
 
-  /** 9. commitCooldown: growth continues fast past the first commit
-   *  (ratio 1.8^p over 20 frames re-crosses the threshold inside 350ms). */
+  /** 9. commitCooldown: the pull-back continues fast past the first commit
+   *  (ratio 1.8^-p over 20 frames re-crosses the threshold inside 350ms). */
   commitCooldown: () =>
     buildPair(
       [
-        holdPair(9, pairPose.bothOpen()),
-        holdPair(4, pairPose.bothPinched()),
-        { frames: 20, at: (p) => pairPose.bothPinched(1.8 ** p) },
-        holdPair(6, pairPose.bothOpen(1.8)),
+        holdPair(9, pairPose.bothOpen(1, 0.16, 0.16)),
+        holdPair(4, pairPose.bothPinched(1, 0.16, 0.16)),
+        { frames: 20, at: (p) => pairPose.bothPinched(1.8 ** -p, 0.16, 0.16) },
+        holdPair(6, pairPose.bothOpen(1 / 1.8, 0.16, 0.16)),
       ],
       210,
       0.0004,

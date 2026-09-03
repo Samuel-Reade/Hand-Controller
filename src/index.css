@@ -563,3 +563,87 @@ body {
 .hand-state[data-state='zoom'] {
   color: var(--ivory);
 }
+
+/* --- crosshair sight (ORB_SELECT_SPEC §3, PT1) ---------------------------- */
+
+.crosshair {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --arm: 7px;
+  --sight: var(--brass);
+}
+
+/* Four hairline arms with a small gap at dead centre - a sight, not a plus. */
+.crosshair-arm {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  background: var(--sight);
+  opacity: 0.4;
+  transition: opacity 120ms, background-color 140ms;
+}
+
+.crosshair-arm.n,
+.crosshair-arm.s {
+  width: 1px;
+  height: var(--arm);
+  margin-left: -0.5px;
+}
+.crosshair-arm.n { transform: translateY(calc(-1 * var(--arm) - 3px)); }
+.crosshair-arm.s { transform: translateY(3px); }
+
+.crosshair-arm.w,
+.crosshair-arm.e {
+  height: 1px;
+  width: var(--arm);
+  margin-top: -0.5px;
+}
+.crosshair-arm.w { transform: translateX(calc(-1 * var(--arm) - 3px)); }
+.crosshair-arm.e { transform: translateX(3px); }
+
+/* Acquired: the sight tightens (arms pull in) and takes the node's hue. */
+.crosshair[data-state='acquired'] .crosshair-arm,
+.crosshair[data-state='confirming'] .crosshair-arm {
+  opacity: 0.95;
+}
+.crosshair[data-state='acquired'] .crosshair-arm.n,
+.crosshair[data-state='confirming'] .crosshair-arm.n {
+  transform: translateY(calc(-1 * var(--arm) - 1px));
+}
+.crosshair[data-state='acquired'] .crosshair-arm.s,
+.crosshair[data-state='confirming'] .crosshair-arm.s {
+  transform: translateY(1px);
+}
+.crosshair[data-state='acquired'] .crosshair-arm.w,
+.crosshair[data-state='confirming'] .crosshair-arm.w {
+  transform: translateX(calc(-1 * var(--arm) - 1px));
+}
+.crosshair[data-state='acquired'] .crosshair-arm.e,
+.crosshair[data-state='confirming'] .crosshair-arm.e {
+  transform: translateX(1px);
+}
+
+/* The ring rides the highlighted node, positioned from its projection. */
+.crosshair-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border: 1px solid var(--brass);
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 100ms, background-color 120ms, border-width 120ms;
+}
+
+/* Confirming: the ring closes/fills so the tap reads before the transition. */
+.crosshair[data-state='confirming'] .crosshair-ring {
+  border-width: 2px;
+  background: color-mix(in srgb, var(--sight) 26%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crosshair-arm,
+  .crosshair-ring {
+    transition: none;
+  }
+}
