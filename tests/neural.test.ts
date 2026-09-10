@@ -73,7 +73,10 @@ describe('graph structure', () => {
 
   it('bokeh: exactly bokehCount terminals flagged, no other tier', () => {
     const bokeh = nodes.filter((n) => n.isBokeh)
-    expect(bokeh).toHaveLength(NCONF.generation.bokehCount)
+    // Rally shape: no terminal tier is generated, so no bokeh - the rule is
+    // min(bokehCount, terminals), which the P0 config exercised at 10.
+    const terminals = nodes.filter((n) => n.tier === 'terminal').length
+    expect(bokeh).toHaveLength(Math.min(NCONF.generation.bokehCount, terminals))
     for (const b of bokeh) expect(b.tier).toBe('terminal')
   })
 
@@ -96,7 +99,13 @@ describe('graph structure', () => {
 })
 
 describe('brightness monotonicity (restated gate, §6)', () => {
-  it('effective peak luminance is monotonic in tier among shell members', () => {
+  // Since the rallies remap (2026-09-09) TIER_OPA is no longer applied by
+  // tier on the field: opaFor() interpolates terminal -> hub by cumulative
+  // rallies, so this table is the two ENDS of that scale (plus the anchor and
+  // the level-1 shell). The field-level claim - bigger/brighter <=> more
+  // rallies - is pinned in tests/rallies.test.ts. This keeps the endpoints
+  // ordered so the scale cannot invert.
+  it('the TIER_OPA scale endpoints are ordered (hub > node > sub > terminal)', () => {
     // disc luminance ∝ coreOpa × haloOpa (the C2 whole-sprite multiplier)
     const eff = (t: keyof typeof TIER_OPA) => TIER_OPA[t][2] * TIER_OPA[t][0]
     expect(eff('hub')).toBeGreaterThan(eff('node'))
@@ -151,9 +160,23 @@ describe('byte-parity with the prototype generator (ground truth)', () => {
     return nodes
   }
 
-  it('default-config port === prototype, node for node', () => {
+  // The generator is byte-exact for the PROTOTYPE's constants. The defaults
+  // themselves moved on 2026-09-09 (tighter clusters - DECISIONS.md), so the
+  // parity run pins the P0 generation values explicitly.
+  const P0_GENERATION = {
+    hubCount: 20,
+    hubRadialMin: 0.9, hubRadialMax: 1.1,
+    echoesByTraction: false,
+    nodesPerHubMin: 2, nodesPerHubMax: 5,
+    subsPerNodeMin: 1, subsPerNodeMax: 4,
+    terminalsPerSubMin: 0, terminalsPerSubMax: 3,
+    nodeRadialMin: 1.1, nodeRadialMax: 1.28, nodeJitter: 0.22,
+    subRadialMin: 1.06, subRadialMax: 1.18, subJitter: 0.28,
+    terminalRadialMin: 1.04, terminalRadialMax: 1.12, terminalJitter: 0.38,
+  }
+  it('port on the P0 constants === prototype, node for node', () => {
     const proto = protoGraph()
-    const ours = buildGraph()
+    const ours = buildGraph({ ...NCONF, generation: { ...NCONF.generation, ...P0_GENERATION } })
     expect(ours.length).toBe(proto.length)
     for (let i = 0; i < proto.length; i++) {
       expect(ours[i].name).toBe(proto[i].name)

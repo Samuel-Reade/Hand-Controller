@@ -38,17 +38,20 @@ export function Crosshair() {
       }
       root.style.setProperty('--arm', `${NCONF.point.crosshairSize}px`)
 
-      if (p.name) {
-        const r = Math.max(9, Math.min(140, p.ringR))
+      // The arms take the target's hue whenever anything is highlighted -
+      // including the anchor fallback, where that IS the whole signal.
+      if (p.name) root.style.setProperty('--sight', p.hue)
+      else root.style.removeProperty('--sight')
+      // The ring hugs the star's disc; ringR = 0 means "no ring" (anchor).
+      if (p.name && p.ringR > 0) {
+        const r = Math.max(6, Math.min(140, p.ringR))
         ring.style.transform = `translate(-50%, -50%) translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px)`
         ring.style.width = `${(r * 2).toFixed(1)}px`
         ring.style.height = `${(r * 2).toFixed(1)}px`
         ring.style.borderColor = p.hue
         ring.style.opacity = String(NCONF.point.ringOpacity)
-        root.style.setProperty('--sight', p.hue)
       } else {
         ring.style.opacity = '0'
-        root.style.removeProperty('--sight')
       }
     }
     raf = requestAnimationFrame(tick)

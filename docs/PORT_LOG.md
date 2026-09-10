@@ -456,3 +456,351 @@ restructure the interaction system. Decisions in docs/DECISIONS.md (same date).
   fit that still shows every node.
 - Pitch now reaches +/-94.5 deg; past 90 the field reads inverted, exactly
   as ORB_SELECT_SPEC §1 accepts.
+
+---
+
+# Visual pass: zoom-invariant glow, camera-riding backdrop, one reticle, alive via light
+
+Brief and decisions: docs/DECISIONS.md (2026-09-09). Shader-only; the
+integrator, arbiter, pointing model and P0 sizes are untouched.
+
+## What changed
+- `src/neural/starField.ts`: `iPhase` attribute; `uTime / uBreathAmp /
+  uBreathPeriod / uTanHalfFov / uGlowFadeStart / uGlowFadeEnd`; `vGlow` =
+  fade x breath multiplies corona + bloom alpha only. `syncStarUniforms(mat,
+  timeSec?)` - beads omit the clock and stay still.
+- `src/neural/trails.ts`: `aFlow` (t, phase) per vertex; flow band in the
+  fragment shader; `syncTrailUniforms(core, glow, timeSec)`.
+- `src/neural/NeuralScene.tsx`: backdrop planes follow the camera at their
+  rest distance; clock into the syncs; sliders (neural render: glowFadeStart,
+  glowFadeEnd, breathAmp, breathPeriod; neural trail: flowEnabled, flowGain,
+  flowWidth, flowPeriod); DEV seam `window.__neuralDev.setZoom(f)`.
+- `src/neural/config.ts`: the eight keys above + `frameFraction()` (the
+  shader's fade input mirrored for tests).
+- `src/App.tsx`: `{!neural && <Reticle/>}`. `scripts/interact.mjs` -> globe.
+- `scripts/verify-neural.mjs`: new check - MEDIAN frame luminance (24x15
+  grid) at a real 7x zoom <= 25.5/255. `tests/visual.test.ts` (new, 11).
+
+## Machine gate - PASS
+- Unit 139/139; typecheck + lint clean.
+- verify-neural: all PASS incl. the new zoom check; white-clip 0.13%
+  (unchanged); 9 draws; 60 fps; layout hash 650ce55b (unchanged).
+- verify-pointing: 9/9 PASS; 13/26 ordinary acquisitions.
+- Frame luminance /255, real zoom path, before -> after:
+    six corner points   rest 4.4 -> 4.4 · 3x 46.5 -> 16.4 · 7x 69.3 -> 16.7
+    grid median         rest 7.0 -> 6.9 · 3x 58.8 -> 19.1 · 7x 88.2 -> 16.2
+    dark fraction <30   rest 76% -> 76% · 3x 4.2% -> 60% · 7x 0.0% -> 63%
+  Gate rotation (yaw 0) at 7x: median 9.0, dark 68%, six-point 40.9 - the
+  six-point figure is two fat near-camera trails on two sample points, which
+  is why the gate uses the median.
+- Attribution of the 7x wash BEFORE the fix (toggling subsystems):
+  planes-only 47.7 · +grain 49.0 · +sprites 61.2 · trails add 0.0.
+- Motion at rest, 1.5 s apart: 1.65% of pixels > 8/255, 0.010% > 40/255.
+
+## Method notes (two own errors, both corrected)
+1. The first after-measurement dollied by mutating `NCONF.camera.z`, which by
+   construction pins the backdrop to its rest WORLD position - so it measured
+   the planes exactly as if the fix were absent (3x 46 -> 44, 7x 69 -> 62)
+   and nearly led to the wrong conclusion. Real two-hand zoom changes the
+   factor with camera.z fixed; the DEV seam drives that path; the gate uses it.
+2. The first gate check sampled six corner points and FAILED (40.9) on a
+   frame that was visibly black (median 9.0): two near-camera trails crossed
+   two sample points. Replaced with the grid median, which separates
+   before/after in both directions (88 vs 9-19) and is indifferent to where
+   the trails happen to fall.
+
+## For the human gate
+- breathAmp 0.35 / flowGain 0.9 are the "restrained" defaults; both to zero
+  gives the P4 still image. If the field reads busy, flowGain first.
+- glowFadeStart 0.3 keeps rest byte-identical; lowering it to ~0.2 trims a
+  few more /255 at 3x at the cost of a barely-visible corona dip at rest.
+- Shots: shots/after-rest.png, after-close.png (3x), after-tight.png (7x);
+  before-*.png are the same views before the pass.
+
+---
+
+# Salience pass: momentum channel (placeholder), disc ring, depth
+
+Decisions: docs/DECISIONS.md (2026-09-09, "Salience pass"). Domain: RALLY.md §5.
+
+## What changed
+- `src/neural/momentum.ts` (new): `nameUnit` (FNV-1a -> [0,1)), `momentumFor`
+  (0 for ~90%, 0.35..1 for `movingFraction`; brain 0). PLACEHOLDER source.
+- `src/neural/starField.ts`: `iMomentum` attribute; `uMomentumGlow /
+  uPulsePeriod / uPulseRateBoost`; halo = min(1, haloOpa + glow x m x pulse)
+  feeds both the corona/bloom alphas and the C2 whole-sprite multiplier
+  (brighter, never bigger). Ambient breath removed.
+- `src/neural/trails.ts`: `aFlow` is (t, phase, childMomentum); band gain x
+  momentum, rate x (1 + boost x m); `flowBandPosition(.., momentum, boost)`.
+- `src/neural/config.ts`: `momentum` group; `DISC_FRACTION`; `ringRadiusPx`;
+  depth.opacityFloor 0.15; breath keys removed.
+- `src/neural/NeuralScene.tsx`: momentum into instances (field + level-1
+  reports) and report trail specs; ring via `ringRadiusPx`; slider group.
+- `src/neural/Crosshair.tsx`: hue on the arms whenever anything is
+  highlighted; ring only when ringR > 0.
+- `tests/visual.test.ts` rewritten: 20 tests (152 total).
+
+## Machine gate - PASS
+- Unit 152/152; typecheck + lint clean. `grep breath src tests scripts` empty.
+- verify-neural 7/7: white-clip 0.10% (was 0.13%), 7x median 8.9/255, 9
+  draws, 60 fps, layout 650ce55b. verify-pointing 9/9, 13/26.
+- Rest DOM: pointed=brain, state=acquired, ring opacity 0 (no anchor ring).
+- Motion 1.5 s apart: 0.57% > 8/255 (was 1.65%); 0.025% > 40/255 (was
+  0.010%). Fewer pixels move; the ones that do move harder.
+
+## For the human gate
+- `movingFraction` is the placeholder's one product knob: 0.10 reads as "a
+  few things are happening"; 0.25 reads busy. It rebuilds attributes.
+- `momentum.glow` 0.6 lets a terminal-tier shout at full momentum peak
+  around hub brightness (0.2 + 0.6 = 0.8 halo) - "a small node streaking
+  next to a dead giant" (RALLY §5). Lower it if small movers overpower hubs.
+- `opacityFloor` 0.15: if the far side reads as missing rather than distant,
+  0.2 is the compromise.
+
+---
+
+# Tighter clusters + tie-break fix
+
+Decision and the measurement table: docs/DECISIONS.md ("Tighter clusters",
+2026-09-09). Generator untouched; nine generation defaults changed.
+
+## What changed
+- `src/neural/config.ts`: child jitter 0.12 / 0.14 / 0.18 rad (was 0.22 /
+  0.28 / 0.38); radial 1.05-1.16 / 1.03-1.10 / 1.02-1.07 (was 1.10-1.28 /
+  1.06-1.18 / 1.04-1.12). Cluster RMS 580 -> 290 wu; max reach 1282 -> 603 wu;
+  child->parent means 275/309/414 -> 149/145/175 wu; disc overlaps
+  parent-child 8/434, siblings 25/4829.
+- `src/neural/NeuralScene.tsx`: "neural cluster" slider group (nine rebuild
+  sliders).
+- `tests/cluster.test.ts` (new, 6): the tightness contract - RMS < 350, reach
+  < 0.65 R, means < 200, still random (std > 20), overlaps < 3% / 1.5%.
+- `tests/neural.test.ts`: the prototype byte-parity test now builds on the
+  P0 constants explicitly - it pins the GENERATOR, and the defaults are
+  allowed to differ from the prototype.
+- `src/neural/pointing.ts` `bestCandidate`: two-pass. The single pass
+  compared each candidate with the RUNNING best, so depth ties chained
+  (A -> C -> B) and could elect a node more than a band from the true nearest;
+  denser clusters surfaced it (27.1 px beat 16.7 px on a 10 px band). The
+  band is now relative to the minimum. Regression test in pointing.test.ts.
+
+## Machine gate - PASS
+- Unit 159/159; typecheck + lint clean.
+- Layout hash 650ce55b -> 37015199 (tuple changed, by design); 455 nodes,
+  one incoming trail each; 9 draws; 60 fps.
+- White-clip 0.41% (was 0.10%): denser clusters stack more additive glow in
+  the centre window. Bound 1.28%.
+- 7x zoom median 8.9/255 (unchanged). Pointing 9/9, 11-12/26 ordinary
+  acquisitions.
+- Shots: shots/before-cluster.png -> shots/after-cluster.png (same view).
+
+## For the human gate
+- The field's outer radius fell (~1856 -> ~1500 wu), so at camera.z 4600 the
+  constellation sits smaller in frame (~34% margin, was 9%). Pulling the
+  camera to ~3700 would refill the frame BUT puts the anchor's corona at
+  0.36 of the frame height, past glowFadeStart 0.3 - the rest view would no
+  longer be fade-inert (visual.test pins that). Raise glowFadeStart with it
+  if you want the tighter framing; a human call.
+- "neural cluster" sliders rebuild the layout; the tightness test is the
+  guard-rail if a value is promoted to a default.
+
+---
+
+# Rallies channel + star cores
+
+Decisions: docs/DECISIONS.md ("Interaction is the picture", 2026-09-09).
+
+## What changed
+- `src/neural/rallies.ts` (new): `ownRallies` (u^tailExponent, salted hash),
+  `computeRallies` (§3 roll-up, normalised), `diamFor`, `opaFor`.
+- `src/neural/starField.ts`: `iRallies` attribute; `uCore[3]`,
+  `uCoreStrength`, `uCoreFalloff`; disc = mix(core, body) by radial falloff x
+  heat; pinpoint radius 0.22 -> 0.38 x DR across rallies.
+- `src/neural/trails.ts`: `buildTrailSpecs(nodes, cfg, diamOf)` - surfaces
+  from the per-node diameter.
+- `src/neural/NeuralScene.tsx`: per-instance diam / opa / rallies from the
+  roll-up; `diamByName` for the ring; slider groups "neural rallies
+  (placeholder)" (rebuild) and coreStrength / coreFalloff under render.
+- `src/neural/config.ts`: `rallies` group; `render.coreStrength / coreFalloff
+  / coreRim`. `palette.ts`: `core` and `mid` are now rendered.
+- `tests/rallies.test.ts` (new, 8). `tests/neural.test.ts` §6 test reframed.
+
+## Gamma probe (headless, before choosing sizeGamma)
+  normalised rallies: p10 0.0002 · p25 0.0044 · median 0.034 · p75 0.087 · p90 0.165
+  gamma   median t   share t<0.2 (dimmer than old sub)   median halo   median diam
+  0.45      0.22            47%                              0.34         33 wu
+  0.40      0.26            38%                              0.37         37 wu
+  0.35      0.31            31%                              0.40         41 wu   <- chosen
+  0.30      0.36            27%                              0.44         46 wu
+  (old tiers: term .20 / sub .38 / node .60 / hub .85 halo; sub 30 wu)
+
+## Machine gate - PASS
+- Unit 167/167; typecheck + lint clean.
+- verify-neural 7/7: white-clip 0.46% (0.41 -> 0.46; white cores on the big
+  central shouts), 7x median 10.1/255, 9 draws, 60 fps, layout 37015199.
+- verify-pointing 9/9, 11/26.
+- Shots: shots/after-rallies.png (rest), shots/after-rallies-3x.png.
+- First cut (body -> core, no rim, gamma 0.45) shipped briefly and was
+  revised in the same session: cores barely registered against the pale
+  body colour, and the field read wispy - see DECISIONS.
+
+## For the human gate
+- `tailExponent` 4 / `sizeGamma` 0.45 set how unequal the field looks: raise
+  the exponent for fewer, bigger giants; lower gamma to lift the small end.
+- `coreStrength` 0.9: if the big shouts read as blown-out white, 0.7 keeps
+  the body colour in the core; 0 is the 7.1 flat disc for comparison.
+- The roll-up makes hubs the biggest shouts by construction (they carry
+  their subtree). If a flat "a few random giants anywhere" field is wanted
+  instead, drop the roll-up - but that breaks the §3 parent >= children rule
+  the placeholder tree is standing in for.
+
+---
+
+# Rally shape: 160 main posts, rare echoes, two-band rallies
+
+Decisions: docs/DECISIONS.md ("Rally shape", 2026-09-10).
+
+## What changed
+- `src/neural/config.ts`: hubCount 160; nodesPerHub 0/0.7; subs 0/0;
+  terminals 0/0; `rallies` = { popularFraction 0.12, minorMax 0.15,
+  popularMin 0.4, sizeGamma 0.6, diamMin 13, diamMax 104 } (tailExponent
+  removed); `trail.spokeMinWeight` 0.06; `radByTier.brain` 1.2.
+- `src/neural/rallies.ts`: two-band `ownRallies`; salted draw.
+- `src/neural/momentum.ts`: `nameUnit(name, salt)` with murmur3 finalizer.
+- `src/neural/trails.ts`: `buildTrailSpecs(nodes, cfg, diamOf, ralliesOf)`;
+  `TrailSpec.weight` = spokeMinWeight + (1 - spokeMinWeight) t^2, carried in
+  `aFlow.w` (vec4) and applied to the BASE colour in the fragment shader -
+  the momentum band adds unweighted; radius x (0.5 + 0.5 t);
+  radByTier.brain 1.2.
+- `src/neural/pulses.ts`: `iMomentum` gates dot alpha (smoothstep 0..0.35).
+- `src/neural/NeuralScene.tsx`: ralliesOf into trail specs; sliders -
+  hubCount to 400, rallies bands, spokeMinWeight.
+- `scripts/verify-pointing.mjs`: distance check against releaseRadius.
+- Tests: neural (bokeh rule, P0 constants incl. counts), cluster (Rally
+  shape, rendered-disc overlaps), rallies (two bands, spokes by traction).
+
+## Machine gate - PASS
+- Unit 168/168; typecheck + lint clean.
+- verify-neural 7/7: 200 nodes / 199 trails, 9 draws, 60 fps, layout
+  d155a987; white-clip 0.11% (0.46 -> 0.11: 160 mostly-hairline spokes
+  replace 20 hot ones); 7x median 14.2/255 (10.1 -> 14.2: more posts near
+  the camera at 7x; bound 25.5 - watch this if hubCount goes higher).
+- Attribution at rest (chrome=0, centre 700 px, planes subtracted): trails
+  29% / sprites 71% of field light; at the brain's surround 43% / 63%
+  (additive, so > 100%). Recorded because it contradicted the eye - the
+  starburst READ as dominant while carrying under a third of the light.
+- Spoke weighting shipped twice in the session: linear from 0.25 (still a
+  dandelion, per the shot), then quadratic from 0.06 with the band moved
+  off the weight - see DECISIONS.
+- verify-pointing 9/9: 18/26 ordinary acquisitions, 17 samples inside 46 px,
+  46 targetable of 200.
+- Shots: shots/after-posts.png (rest), shots/after-posts-3x.png.
+
+## For the human gate
+- `hubCount` 160 is the "a lot of these" number; the slider runs to 400. Past
+  ~250 the 7x-zoom darkness check will need glowFadeStart lowered.
+- `popularFraction` 0.12 / `popularMin` 0.4 set how many posts read as
+  popular and how far above the crowd they start. `sizeGamma` 0.6 is the
+  contrast knob.
+- `spokeMinWeight` 0.06 (quadratic): at 0 minor posts float unconnected
+  until they move; at 0.25 the dandelion returns.
+- Camera: the field's outer radius is now ~1.16 R (echoes) ~= 1280 wu -
+  camera.z 4600 leaves ~45% margin. Tightening framing still requires
+  raising glowFadeStart (rest-view parity test).
+
+---
+
+# Random brain distance + echoes by traction
+
+Decisions: docs/DECISIONS.md (2026-09-10, "Random brain distance").
+
+## What changed
+- `src/neural/graph.ts`: the per-hub echo loop bound is chosen by the post's
+  own traction when `generation.echoesByTraction`; off = P0 path. Imports
+  `ownRallies` (pure hash, no RNG draws).
+- `src/neural/config.ts`: hubRadial 0.6-1.35; echoesByTraction true;
+  popularEcho 3-7; nodeJitter 0.16, nodeRadial 1.06-1.20; generationTuple +
+  echo bounds + rallies band params.
+- `src/neural/NeuralScene.tsx`: sliders hubRadialMin/Max, echoesByTraction,
+  popularEchoMin/Max (all rebuild).
+- Tests: neural (P0 constants pin hubRadial 0.9-1.1 and the flag off),
+  cluster (echoes concentrate on popular posts; distance random within
+  limits; mean bound 240 with reason). 170 total.
+
+## Probe (headless, before choosing)
+  config                       nodes echoes  popular mean / minor mean   post r min/med/max   overlaps p-c / sib
+  radial .6-1.35, echo 3-7      258    97       4.8 / 0.23               663 / 1088 / 1485        4/97 / 3/127
+  radial .7-1.3                 258    97       4.8 / 0.23               773 / 1113 / 1430        3/97 / 2/127
+  radial .5-1.4                 258    97       4.8 / 0.23               554 / 1064 / 1539  (19 posts inside the corona)
+  echo 2-6                      252    91       4.1 / 0.26                                        2/91 / 1/86
+  echo 4-9                      280   119       6.2 / 0.27                                        4/119 / 9/219
+  + echo room .16 / 1.06-1.20   258    97       4.8 / 0.23               663 / 1088 / 1485        0/97 / 1/127  <- chosen
+
+## Machine gate - PASS
+- Unit 170/170; typecheck + lint clean.
+- verify-neural 7/7: 258 nodes / 257 trails, 9 draws, 60 fps, layout
+  d29411df; white-clip 0.09%; 7x median 14.3/255.
+- verify-pointing 9/9: 18/26 ordinary acquisitions.
+- Shots: shots/after-depth.png (rest), shots/after-depth-3x.png.
+
+## For the human gate
+- `hubRadialMin` 0.6: below ~0.55 popular posts start overlapping the
+  anchor's corona; `hubRadialMax` 1.35: above ~1.5 echoes leave the camera
+  fit at rest.
+- `popularEchoMin/Max` 3-7 is the "decent amount"; 4-9 reads as a crowd
+  around each popular post and doubles sibling overlaps.
+
+---
+
+# "Powerful" nodes: core falloff fix, blaze, spikes
+
+Decisions: docs/DECISIONS.md (2026-09-10, "More powerful nodes").
+
+## What changed
+- `src/neural/starField.ts`: layers 3-4 rebuilt as the luminous body -
+  gaussian heart + soft-edged body colour + pin - in its own body stack
+  scaled by `vMultBody` (depth x tierMult), composited over the glow stack
+  (scaled by vMult, C2). Uniforms uCoreSize / uDiscEdge replace
+  uCoreFalloff. `vCorona` per instance = uCoronaMult x
+  (1 + uBlazeSpread x rallies), dr = DR / vCorona; `vBlaze` = 1 + uBlaze x
+  rallies^2 on corona + bloom alpha; spike gate = anchor ? 1 :
+  smoothstep(spikeAbove - 0.08, spikeAbove, rallies), length x spikeScale.
+- `src/neural/config.ts`: `coreSize` 0.42, `discEdge` 1.35 (coreFalloff
+  removed); `blaze`, `blazeSpread`, `spikeAbove`, `spikeScale`;
+  `bodyAlpha()`, `heartAlpha()` mirrors.
+- `src/neural/NeuralScene.tsx`: anchor + drilled-role materials set
+  uBlaze/uBlazeSpread 0; four sliders under neural render.
+- `tests/visual.test.ts`: luminous-body profile (solid inside, half at dr,
+  gone by discEdge, monotonic; heart brighter/wider on popular, reaches
+  1.0); the rest-view fade-inert check uses the largest blazing post quad.
+  172 total.
+
+## Machine gate - PASS
+- Unit 172/172; typecheck + lint clean.
+- verify-neural 7/7: white-clip 0.21% (0.09 -> 0.21: the hearts now reach
+  white; bound 1.28%), 7x median 14.4/255, 9 draws, 60 fps, layout d29411df
+  (unchanged - render only).
+- Shipped three times in the session: coreFalloff 1.6 (inverted, pale) ->
+  1.7 (dim) -> luminous body. A stray backtick in a GLSL comment broke the
+  template literal for one gate run (0/7, page error) - caught by the gate,
+  fixed, re-run.
+- verify-pointing 9/9, 18/26.
+- Shots: shots/after-power.png (rest), shots/after-power-3x.png (2.6x, the
+  user's zoom).
+
+## For the human gate
+- `coreFalloff` 1.7: 2.5 is a pinprick heart; 1.0 is a soft half-disc glow.
+- `blaze` 1.0 / `blazeSpread` 0.5: at 2.0 / 1.0 the popular posts start
+  to rival the anchor at rest - the brain should stay the brightest.
+- `spikeAbove` 0.8 puts spikes on ~5 posts; 0.6 on ~13; 1.01 anchor-only.
+
+---
+
+# Strings into the core, beads off
+
+Decisions: docs/DECISIONS.md (2026-09-10, "Strings run into the core").
+- `src/neural/trails.ts`: endpoints = centre + endInset x visible disc radius
+  (DISC_FRACTION); `TrailSpec.parentName`. `config`: beadsEnabled false,
+  endInset 0; slider endInset. `tests/visual.test.ts` +3; `tests/trails.test.ts`
+  P3 endpoint test split into centre/inset contracts. 175 total.
+- verify-neural 7/7 (white-clip 0.21 -> 0.24%, 7x 14.0), verify-pointing 9/9.
+- Shot: shots/after-strings.png (4.5x).

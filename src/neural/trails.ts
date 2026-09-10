@@ -20,31 +20,47 @@ import {
   ShaderMaterial,
   Vector3,
 } from 'three'
-import { NCONF } from './config'
+import { DISC_FRACTION, NCONF } from './config'
 import type { NeuralConfig } from './config'
 import type { NeuralNode } from './graph'
 import { nodePosition } from './graph'
+import { momentumFor } from './momentum'
 import { PAL, TRAIL_BASE, TRAIL_HOT } from './palette'
 import type { NeuralTier } from './palette'
 
 export interface TrailSpec {
+  /** trail start - the parent's centre when trail.endInset is 0 */
   pSurf: Vector3
   ctrl: Vector3
+  /** trail end - the child's centre when trail.endInset is 0 */
   cSurf: Vector3
   radius: number
+  parentName: string
   parentTier: NeuralTier
   parentBody: Color // linear working space
   childBody: Color
   childName: string
+  /** RALLY §5 momentum of the CHILD (this is its incoming trail) - gates the energy band */
+  childMomentum: number
+  /** brightness x (and half the radius scaling) by the child's traction: spokeMinWeight..1 */
+  weight: number
 }
 
 const UP = new Vector3(0, 1, 0)
 const FALLBACK = new Vector3(1, 0, 0)
 
-/** Pure geometry plan for every trail - exactly one per non-brain node. */
+/**
+ * Pure geometry plan for every trail - exactly one per non-brain node.
+ * `diamOf` gives each node's sprite diameter so trails end on the disc
+ * surface; sizes are the rallies channel now, so the default (tier table) is
+ * only right for callers that still size by tier. `ralliesOf` (0..1) weights
+ * the trail's brightness and radius by the child's traction (default: full).
+ */
 export function buildTrailSpecs(
   nodes: readonly NeuralNode[],
   cfg: NeuralConfig = NCONF,
+  diamOf: (n: NeuralNode) => number = (n) => cfg.render.tierDiam[n.tier],
+  ralliesOf: (n: NeuralNode) => number = () => 1,
 ): TrailSpec[] {
   const byName = new Map(nodes.map((n) => [n.name, n]))
   const positions = new Map(nodes.map((n) => [n.name, new Vector3(...nodePosition(n))]))
@@ -61,8 +77,11 @@ export function buildTrailSpecs(
     const dist = dir.length()
     if (dist < 1) continue // prototype guard; never fires at default config
     dir.divideScalar(dist)
-    const pSurf = pPos.clone().addScaledVector(dir, cfg.render.tierDiam[parent.tier] / 2)
-    const cSurf = cPos.clone().addScaledVector(dir, -cfg.render.tierDiam[n.tier] / 2)
+    // endpoints: inset from each centre by endInset x the visible disc radius
+    // (0 = the centre: the string runs into the core)
+    const discR = (m: NeuralNode) => (diamOf(m) * cfg.render.spriteScale * DISC_FRACTION) / 2
+    const pSurf = pPos.clone().addScaledVector(dir, cfg.trail.endInset * discR(parent))
+    const cSurf = cPos.clone().addScaledVector(dir, -cfg.trail.endInset * discR(n))
 
     // Bend: mid + perp × chordLen × bendFraction, sign deterministic from
     // the child's φ/θ - same sign across all rotations.
@@ -74,15 +93,22 @@ export function buildTrailSpecs(
     const sign = Math.sin(n.phi * 7.3 + n.theta) > 0 ? 1 : -1
     const ctrl = mid.addScaledVector(perp, chordLen * cfg.trail.bendFraction * sign)
 
+    // traction weight: a popular post's spoke is full; a minor one a hairline.
+    // Quadratic in t so the median post (t ~ 0.2) sits near the floor.
+    const t = Math.pow(Math.min(1, Math.max(0, ralliesOf(n))), cfg.rallies.sizeGamma)
+    const weight = cfg.trail.spokeMinWeight + (1 - cfg.trail.spokeMinWeight) * t * t
     specs.push({
       pSurf,
       ctrl,
       cSurf,
-      radius: cfg.trail.radByTier[parent.tier] ?? cfg.trail.radDefault,
+      radius: (cfg.trail.radByTier[parent.tier] ?? cfg.trail.radDefault) * (0.5 + 0.5 * t),
+      parentName: parent.name,
       parentTier: parent.tier,
       parentBody: new Color(PAL[parent.hue].body),
       childBody: new Color(PAL[n.hue].body),
       childName: n.name,
+      childMomentum: momentumFor(n.name),
+      weight,
     })
   }
   return specs
@@ -144,6 +170,8 @@ export function buildTrailGeometry(
   const idxPerTrail = SEGS * RAD * 6
   const positions = new Float32Array(specs.length * vertsPerTrail * 3)
   const colors = new Float32Array(specs.length * vertsPerTrail * 3)
+  // (t along the trail, per-trail phase, child momentum, traction weight)
+  const flow = new Float32Array(specs.length * vertsPerTrail * 4)
   const indices = new Uint32Array(specs.length * idxPerTrail)
 
   const center = new Vector3()
@@ -155,9 +183,13 @@ export function buildTrailGeometry(
 
   let vOff = 0
   let iOff = 0
+  let si = 0
   for (const spec of specs) {
     const radiusMult = pass === 'glow' ? cfg.trail.glowRadiusMult : 1
     const vStart = vOff
+    // deterministic golden-ratio stagger per trail (no RNG)
+    const phase = (si * 0.6180339887) % 1
+    si++
 
     // Initial frame: normal = least-aligned axis projected off the tangent.
     bezierTangent(tangent, spec.pSurf, spec.ctrl, spec.cSurf, 0)
@@ -188,9 +220,15 @@ export function buildTrailGeometry(
         positions[vi] = center.x + arm.x * r
         positions[vi + 1] = center.y + arm.y * r
         positions[vi + 2] = center.z + arm.z * r
+        // colour stays UNWEIGHTED: the shader applies weight to the base only,
+        // so the momentum band brightens a hairline spoke at full strength
         colors[vi] = col.r
         colors[vi + 1] = col.g
         colors[vi + 2] = col.b
+        flow[vOff * 4] = t
+        flow[vOff * 4 + 1] = phase
+        flow[vOff * 4 + 2] = spec.childMomentum
+        flow[vOff * 4 + 3] = spec.weight
         vOff++
       }
     }
@@ -212,6 +250,7 @@ export function buildTrailGeometry(
   const geo = new BufferGeometry()
   geo.setAttribute('position', new BufferAttribute(positions, 3))
   geo.setAttribute('color', new BufferAttribute(colors, 3))
+  geo.setAttribute('aFlow', new BufferAttribute(flow, 4))
   geo.setIndex(new BufferAttribute(indices, 1))
   return geo
 }
@@ -220,10 +259,13 @@ const TRAIL_VERT = /* glsl */ `
   uniform float uR;
   uniform float uRangeMult;
   uniform float uFloor;
+  attribute vec4 aFlow;
   varying vec3 vColor;
   varying float vDepth;
+  varying vec4 vFlow;
   void main() {
     vColor = color;
+    vFlow = aFlow;
     vec4 wp = modelMatrix * vec4(position, 1.0);
     float range = uR * uRangeMult;
     float zn = clamp((wp.z + range) / (2.0 * range), 0.0, 1.0);
@@ -234,10 +276,33 @@ const TRAIL_VERT = /* glsl */ `
 `
 const TRAIL_FRAG = /* glsl */ `
   uniform float uOpacity;
+  uniform float uTime;
+  uniform float uFlowGain;
+  uniform float uFlowWidth;
+  uniform float uFlowPeriod;
+  uniform float uFlowInward;
+  uniform float uFlowRateBoost;
   varying vec3 vColor;
   varying float vDepth;
+  varying vec4 vFlow;
   void main() {
-    gl_FragColor = vec4(vColor, uOpacity * vDepth);
+    // Energy flow: a soft band travelling along the trail, staggered per
+    // trail. t runs parent (0) -> child (1); dir = -1 (uFlowInward) moves the
+    // band child -> parent so energy converges on the brain, +1 radiates out.
+    // Circular distance so the band wraps cleanly; it brightens the authored
+    // colour rather than recolouring it, so red trails stay red. Per
+    // fragment, from a clock uniform - zero JS. Mirrored in flowBandPosition().
+    // RALLY §5: the band is the momentum channel's comet-tail - only a moving
+    // shout's trail carries it (x vFlow.z), and faster with more momentum.
+    float dir = uFlowInward > 0.5 ? -1.0 : 1.0;
+    float rate = (1.0 + uFlowRateBoost * vFlow.z) / uFlowPeriod;
+    float band = fract(vFlow.x - dir * (uTime * rate + vFlow.y));
+    float d = min(band, 1.0 - band);
+    float flow = uFlowGain * vFlow.z * exp(-(d * d) / (2.0 * uFlowWidth * uFlowWidth));
+    // Traction sets the BASE (vFlow.w: hairline for a minor post, full for a
+    // popular one); the momentum band adds at full strength regardless, so a
+    // small post that starts moving still shows its comet-tail.
+    gl_FragColor = vec4(vColor * (vFlow.w + flow), uOpacity * vDepth);
     #include <colorspace_fragment>
   }
 `
@@ -251,6 +316,12 @@ export function createTrailMaterial(pass: 'core' | 'glow'): ShaderMaterial {
       uRangeMult: { value: NCONF.depth.rangeMult },
       uFloor: { value: NCONF.depth.opacityFloor },
       uOpacity: { value: pass === 'core' ? NCONF.trail.coreOpacity : NCONF.trail.glowOpacity },
+      uTime: { value: 0 },
+      uFlowGain: { value: NCONF.trail.flowEnabled ? NCONF.trail.flowGain : 0 },
+      uFlowWidth: { value: NCONF.trail.flowWidth },
+      uFlowPeriod: { value: NCONF.trail.flowPeriod },
+      uFlowInward: { value: NCONF.trail.flowInward ? 1 : 0 },
+      uFlowRateBoost: { value: NCONF.momentum.pulseRateBoost },
     },
     vertexColors: true,
     transparent: true,
@@ -261,14 +332,40 @@ export function createTrailMaterial(pass: 'core' | 'glow'): ShaderMaterial {
   })
 }
 
-export function syncTrailUniforms(core: ShaderMaterial, glow: ShaderMaterial): void {
+export function syncTrailUniforms(core: ShaderMaterial, glow: ShaderMaterial, timeSec = 0): void {
+  const gain = NCONF.trail.flowEnabled ? NCONF.trail.flowGain : 0
   for (const m of [core, glow]) {
     m.uniforms.uR.value = NCONF.generation.R
     m.uniforms.uRangeMult.value = NCONF.depth.rangeMult
     m.uniforms.uFloor.value = NCONF.depth.opacityFloor
+    m.uniforms.uTime.value = timeSec
+    m.uniforms.uFlowGain.value = gain
+    m.uniforms.uFlowWidth.value = Math.max(0.005, NCONF.trail.flowWidth)
+    m.uniforms.uFlowPeriod.value = Math.max(0.1, NCONF.trail.flowPeriod)
+    m.uniforms.uFlowInward.value = NCONF.trail.flowInward ? 1 : 0
+    m.uniforms.uFlowRateBoost.value = NCONF.momentum.pulseRateBoost
   }
   core.uniforms.uOpacity.value = NCONF.trail.coreOpacity
   glow.uniforms.uOpacity.value = NCONF.trail.glowOpacity
+}
+
+/**
+ * Where along a trail (t: parent 0 -> child 1) the energy band peaks at
+ * `timeSec` - the pure mirror of TRAIL_FRAG's band term, so direction is a
+ * test, not a hope. Inward: t decreases with time (toward the parent/brain).
+ */
+export function flowBandPosition(
+  timeSec: number,
+  period: number,
+  phase: number,
+  inward: boolean,
+  momentum = 1,
+  rateBoost = 0,
+): number {
+  const dir = inward ? -1 : 1
+  const rate = (1 + rateBoost * momentum) / period
+  const x = dir * (timeSec * rate + phase)
+  return ((x % 1) + 1) % 1
 }
 
 export interface TrailMeshes {

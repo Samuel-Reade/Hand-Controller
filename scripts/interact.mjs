@@ -10,7 +10,11 @@ page.on('pageerror', (e) => errors.push(String(e)))
 
 const telemetry = async () => (await page.locator('.telemetry').innerText()).replace(/\n/g, ' ')
 
-await page.goto(`${base}/?tune=0`)
+// Globe-scene smoke test: coast -> lock, detent steps and the brass reticle's
+// tap flash are the GLOBE's interaction model. The neural scene has free
+// rotation and the crosshair sight instead (ORB_SELECT_SPEC), so this targets
+// the globe explicitly.
+await page.goto(`${base}/?scene=globe&tune=0`)
 await page.waitForTimeout(1200)
 console.log('start:      ', await telemetry())
 

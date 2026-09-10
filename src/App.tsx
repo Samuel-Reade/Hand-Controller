@@ -147,7 +147,11 @@ export default function App() {
       {!hideChrome && (
         <>
           <LabelLayer />
-          <Reticle bus={bus} />
+          {/* The brass focus bracket is the globe's rotate-INTO-selection
+              instrument (ORB_BUILD_SPEC §10). With free rotation and the
+              sight, the neural scene showed two reticles on the anchor; it
+              keeps only the sight. docs/DECISIONS.md, visual pass. */}
+          {!neural && <Reticle bus={bus} />}
           {/* ORB_SELECT_SPEC §0 scope guard: the sight is neural-scene only;
               ?scene=globe keeps rotation-as-selection untouched. */}
           {neural && <Crosshair />}

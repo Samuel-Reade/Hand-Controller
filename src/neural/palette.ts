@@ -1,7 +1,7 @@
 // Neural star-network color tokens - ported verbatim from the Figma Make
-// prototype (reference/figma-make-build/src/App.tsx, PAL). `mid`/`deep` are
-// defined but unused by node rendering (ORB_NEURAL_PORT_SPEC §3, ruling 7.1);
-// they stay for palette completeness.
+// prototype (reference/figma-make-build/src/App.tsx, PAL). Since the star-core
+// pass (2026-09-09) `core` lights the disc centre and `mid` its rim; `deep`
+// remains unused.
 
 export type NeuralHue = 'blue' | 'red' | 'violet'
 export type NeuralTier = 'brain' | 'hub' | 'node' | 'sub' | 'terminal'

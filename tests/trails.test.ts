@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Color, Vector3 } from 'three'
-import { NCONF } from '../src/neural/config'
+import { DISC_FRACTION, NCONF } from '../src/neural/config'
 import { buildGraph, nodePosition } from '../src/neural/graph'
 import { PAL, TRAIL_BASE, TRAIL_HOT } from '../src/neural/palette'
 import {
@@ -26,7 +26,11 @@ describe('trail topology (P3 machine gate)', () => {
     }
   })
 
-  it('endpoints sit on the node surfaces along the chord', () => {
+  // 2026-09-10: the prototype's surface-to-surface rule is retired - the
+  // string runs into the core (trail.endInset 0). The contract is now: the
+  // endpoints are the node centres by default, and endInset moves them out
+  // along the chord by that fraction of the VISIBLE disc radius.
+  it('endpoints are the node centres by default (the string runs into the core)', () => {
     const byName = new Map(nodes.map((n) => [n.name, n]))
     const pos = new Map(nodes.map((n) => [n.name, new Vector3(...nodePosition(n))]))
     for (const s of specs.slice(0, 40)) {
@@ -34,10 +38,24 @@ describe('trail topology (P3 machine gate)', () => {
       if (!child) throw new Error('missing child')
       const parent = byName.get(child.parentName as string)
       if (!parent) throw new Error('missing parent')
+      expect(s.parentName).toBe(parent.name)
+      expect(s.pSurf.distanceTo(pos.get(parent.name) as Vector3)).toBeLessThan(1e-6)
+      expect(s.cSurf.distanceTo(pos.get(child.name) as Vector3)).toBeLessThan(1e-6)
+    }
+  })
+
+  it('endInset moves the endpoints out along the chord by that fraction of the disc radius', () => {
+    const cfg = { ...NCONF, trail: { ...NCONF.trail, endInset: 1 } }
+    const byName = new Map(nodes.map((n) => [n.name, n]))
+    const pos = new Map(nodes.map((n) => [n.name, new Vector3(...nodePosition(n))]))
+    const discR = (tier: keyof typeof NCONF.render.tierDiam) => (NCONF.render.tierDiam[tier] * NCONF.render.spriteScale * DISC_FRACTION) / 2
+    for (const s of buildTrailSpecs(nodes, cfg).slice(0, 40)) {
+      const child = byName.get(s.childName) as (typeof nodes)[0]
+      const parent = byName.get(s.parentName) as (typeof nodes)[0]
       const pPos = pos.get(parent.name) as Vector3
       const cPos = pos.get(child.name) as Vector3
-      expect(s.pSurf.distanceTo(pPos)).toBeCloseTo(NCONF.render.tierDiam[parent.tier] / 2, 6)
-      expect(s.cSurf.distanceTo(cPos)).toBeCloseTo(NCONF.render.tierDiam[child.tier] / 2, 6)
+      expect(s.pSurf.distanceTo(pPos)).toBeCloseTo(discR(parent.tier), 6)
+      expect(s.cSurf.distanceTo(cPos)).toBeCloseTo(discR(child.tier), 6)
       // both offsets lie along the parent→child chord
       const chord = cPos.clone().sub(pPos).normalize()
       const off = s.pSurf.clone().sub(pPos).normalize()

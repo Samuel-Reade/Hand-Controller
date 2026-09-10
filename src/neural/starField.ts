@@ -28,6 +28,10 @@ export interface StarInstance {
   tier: NeuralTier
   hue: NeuralHue
   isBokeh?: boolean
+  /** RALLY §5 momentum 0..1 - drives the motion channel; 0 = still (default) */
+  momentum?: number
+  /** RALLY §5 cumulative rallies 0..1 - how white-hot the core burns (size is set via diam/opa) */
+  rallies?: number
   /** selection/affordance state channel (§4.1) - 0 idle; reserved for P5. */
   state?: number
   /** overrides for non-tier instances (junction beads §4.3) */
@@ -46,28 +50,61 @@ const VERT = /* glsl */ `
   uniform float uScaleMult;
   uniform float uCoronaMult;
   uniform float uAffordanceLift;
+  uniform float uTime;
+  uniform float uMomentumGlow;
+  uniform float uPulsePeriod;
+  uniform float uPulseRateBoost;
+  uniform float uTanHalfFov;
+  uniform float uGlowFadeStart;
+  uniform float uGlowFadeEnd;
   uniform vec3 uBody[3];
   uniform vec3 uHalo[3];
+  uniform vec3 uCore[3];
+  uniform vec3 uMid[3];
+  uniform float uCoreRim;
+  uniform float uBlaze;
+  uniform float uBlazeSpread;
   attribute vec3 iPos;
   attribute float iDiam;
   attribute float iHue;
   attribute vec3 iOpa;
   attribute float iBokeh;
   attribute float iState;
+  attribute float iPhase;
+  attribute float iMomentum;
+  attribute float iRallies;
   varying vec2 vUv;
   varying vec3 vBody;
   varying vec3 vHalo;
+  varying vec3 vCore;
+  varying vec3 vRim;
+  varying float vRallies;
+  varying float vCorona;
+  varying float vBlaze;
   varying vec3 vOpa;
   varying float vMult;
+  varying float vMultBody;
   varying float vState;
+  varying float vGlow;
 
   void main() {
     vUv = position.xy; // unit quad corners at ±0.5; r=0 center
     int h = int(iHue + 0.5);
     vBody = uBody[h];
     vHalo = uHalo[h];
+    vCore = uCore[h];
+    vRim = mix(uBody[h], uMid[h], uCoreRim); // saturated edge so the core reads white
+    vRallies = iRallies;
+    // RALLY §5 momentum channel (motion is its own channel, never size): a
+    // moving shout pulses - halo + bloom lift by momentum x uMomentumGlow at a
+    // rate that rises with momentum - and a still one is still. The disc's
+    // SIZE never changes; size is the cumulative-rallies channel.
+    float rate = (1.0 + uPulseRateBoost * iMomentum) / uPulsePeriod;
+    float pulse = 0.5 + 0.5 * sin(6.2831853 * (uTime * rate + iPhase));
+    float lift = uMomentumGlow * iMomentum * pulse;
+    float halo = min(1.0, iOpa.x + lift);
     // §7 affordance: halo lift on the reticle candidate rides iState.
-    vOpa = vec3(iOpa.x * (1.0 + uAffordanceLift * iState), iOpa.y, iOpa.z);
+    vOpa = vec3(min(1.0, halo * (1.0 + uAffordanceLift * iState)), min(1.0, iOpa.y + lift), iOpa.z);
     vState = iState;
 
     vec4 wc = modelMatrix * vec4(iPos, 1.0);
@@ -75,11 +112,30 @@ const VERT = /* glsl */ `
     float zn = clamp((wc.z + range) / (2.0 * range), 0.0, 1.0);
     float ss = zn * zn * (3.0 - 2.0 * zn);
     float depthOpa = mix(uFloor + (1.0 - uFloor) * ss, uBokehOpacity, iBokeh);
-    // PORT_LOG C2: whole-sprite multiplier = depthOpa × haloOpa × tierMult
-    vMult = depthOpa * iOpa.x * uTierMult;
+    // PORT_LOG C2: whole-sprite multiplier = depthOpa × haloOpa × tierMult.
+    // The momentum lift rides haloOpa here too: a moving shout is BRIGHTER
+    // (velocity glow), never bigger.
+    vMult = depthOpa * halo * uTierMult;
+    // the luminous body is NOT capped by haloOpa - the heart must reach white
+    vMultBody = depthOpa * uTierMult;
 
-    float size = iDiam * mix(uSpriteScale, uBokehScale, iBokeh) * uScaleMult * uCoronaMult;
+    // "Powerful": a popular post's glow spreads wider and burns brighter
+    // (rallies-driven); the DISC keeps its size - dr = DR / vCorona below.
+    float coronaMult = uCoronaMult * (1.0 + uBlazeSpread * iRallies);
+    vCorona = coronaMult;
+    vBlaze = 1.0 + uBlaze * iRallies * iRallies;
+    float size = iDiam * mix(uSpriteScale, uBokehScale, iBokeh) * uScaleMult * coronaMult;
     vec4 mv = viewMatrix * wc;
+
+    // Zoom-invariant glow: glare is an optical (screen-space) effect, so a
+    // star's corona must not grow to fill the frame as the camera closes in
+    // - at 7x the anchor's corona alone tinted every pixel lavender. Fade
+    // corona + bloom by the fraction of the frame height the sprite spans;
+    // the solid disc and pinpoint are untouched (they ARE the star).
+    float frac = size / (2.0 * uTanHalfFov * max(1.0, -mv.z));
+    float fade = 1.0 - smoothstep(uGlowFadeStart, uGlowFadeEnd, frac);
+    vGlow = fade;
+
     mv.xy += position.xy * size; // view-space billboard
     gl_Position = projectionMatrix * mv;
   }
@@ -88,12 +144,22 @@ const VERT = /* glsl */ `
 // dr = 0.15 in quad-width UV terms (§4.1); every radius in those same units.
 const FRAG = /* glsl */ `
   uniform float uDesat;
+  uniform float uCoreStrength;
+  uniform float uCoreSize;
+  uniform float uDiscEdge;
   varying vec2 vUv;
   varying vec3 vBody;
   varying vec3 vHalo;
+  varying vec3 vCore;
+  varying vec3 vRim;
+  varying float vRallies;
+  varying float vCorona;
+  varying float vBlaze;
   varying vec3 vOpa;
   varying float vMult;
+  varying float vMultBody;
   varying float vState;
+  varying float vGlow;
 
   const float DR = 0.15;
 
@@ -107,13 +173,14 @@ const FRAG = /* glsl */ `
 
   uniform float uPinOnly;
   uniform float uAnchor;
-  uniform float uCoronaMult;
   uniform float uSpikeLen;
+  uniform float uSpikeAbove;
+  uniform float uSpikeScale;
 
   void main() {
     float r = length(vUv);
     float px = fwidth(r); // ~1 device pixel in r units - resolution independence
-    float dr = DR / uCoronaMult; // §6: corona radius mult enlarges quad, not disc
+    float dr = DR / vCorona; // §6 + blaze: corona/spread enlarge the quad, not the disc
 
     if (uPinOnly > 0.5) {
       // Junction bead (§4.3): tiny soft white dot, 60% - nothing else.
@@ -129,6 +196,7 @@ const FRAG = /* glsl */ `
     float aCor = vOpa.x * (tc < 0.4 ? mix(0.28, 0.10, tc / 0.4)
                                     : mix(0.10, 0.0, (tc - 0.4) / 0.6));
     aCor *= 1.0 - smoothstep(0.49 - px, 0.49, r); // canvas fill circle bound
+    aCor *= vGlow * vBlaze; // zoom fade x blaze (vertex)
     vec4 col = vec4(vHalo, aCor);
 
     // 2. bloom: annular inner DR×0.8 → outer DR×2.8,
@@ -137,25 +205,42 @@ const FRAG = /* glsl */ `
     float aBloom = vOpa.y * (tb < 0.5 ? mix(0.50, 0.18, tb / 0.5)
                                       : mix(0.18, 0.0, (tb - 0.5) / 0.5));
     aBloom *= 1.0 - smoothstep(dr * 2.8 - px, dr * 2.8, r);
+    aBloom *= min(1.0, vGlow * vBlaze);
     col = srcOver(vec4(vBody, aBloom), col);
 
-    // 3. flat solid disc - no gradient, no specular, no rim; ≤1px AA edge
-    float aDisc = vOpa.z * (1.0 - smoothstep(dr - px, dr, r));
-    col = srcOver(vec4(vBody, aDisc), col);
+    // 3. the luminous body (replaces the 7.1 flat disc, which read as a
+    //    sticker at any colour): a white-hot gaussian heart falling through
+    //    the BODY colour to a saturated rim, soft-edged - no outline. Kept in
+    //    its own stack (body) so its alpha is scaled by vMultBody, not by
+    //    haloOpa: the heart of a popular post reaches full white. Size is
+    //    still the rallies channel - half alpha at dr, gone by uDiscEdge dr.
+    //    Mirrored by config.bodyAlpha / heartAlpha.
+    float x = r / dr;
+    float heat = uCoreStrength * (0.35 + 0.65 * vRallies);
+    float coreR = uCoreSize * (0.6 + 0.4 * vRallies);
+    float aHeart = exp(-(x * x) / (2.0 * coreR * coreR)) * (0.45 + 0.55 * vRallies) * vOpa.z;
+    float aBody = vOpa.z * (1.0 - smoothstep(0.6, uDiscEdge, x));
+    vec3 bodyCol = mix(vBody, vRim, smoothstep(0.7, uDiscEdge, x));
+    vec4 body = vec4(bodyCol, aBody);
+    body = srcOver(vec4(mix(vBody, vCore, heat), min(1.0, aHeart)), body);
 
-    // 4. white pinpoint: radius max(DR×0.22, 1px)
-    float pinR = max(dr * 0.22, px);
+    // 4. white pinpoint: radius max(DR×0.22, 1px) - the >= 1 px guarantee for
+    //    far, tiny posts; a little larger on big shouts
+    float pinR = max(dr * (0.22 + 0.16 * vRallies), px);
     float aPin = min(1.0, vOpa.z * 0.85) * (1.0 - smoothstep(pinR - px, pinR, r));
-    col = srcOver(vec4(1.0, 1.0, 1.0, aPin), col);
+    body = srcOver(vec4(1.0, 1.0, 1.0, aPin), body);
 
-    if (uAnchor > 0.5) {
-      // §6 dominance: 4 long + 4 short diffraction cross-spikes, violet-white
-      // - the classic bright-star signature, unique to the anchor ROLE.
+    // Spikes: the anchor's §6 dominance cross at full length; posts above
+    // uSpikeAbove (rallies) get the same cross at uSpikeScale - the bright-
+    // star signature for the shouts that matter. uSpikeAbove > 1 = anchor only.
+    float spikeGate = uAnchor > 0.5 ? 1.0 : smoothstep(uSpikeAbove - 0.08, uSpikeAbove, vRallies);
+    if (spikeGate > 0.001) {
+      float lenMul = uAnchor > 0.5 ? 1.0 : uSpikeScale;
       vec3 spikeCol = mix(vBody, vec3(1.0), 0.65);
       float wL = dr * 0.10;
       float wS = dr * 0.07;
-      float lenL = uSpikeLen;
-      float lenS = uSpikeLen * 0.55;
+      float lenL = uSpikeLen * lenMul;
+      float lenS = uSpikeLen * lenMul * 0.55;
       float ux = (vUv.x + vUv.y) * 0.7071;
       float uy = (vUv.x - vUv.y) * 0.7071;
       float sL =
@@ -167,17 +252,24 @@ const FRAG = /* glsl */ `
       // Spikes emanate FROM the core: masked off inside the disc so the
       // body color still reads and the center doesn't clip to white.
       float spikeMask = smoothstep(dr * 0.7, dr * 1.6, r);
-      float aSpike = clamp(0.9 * sL + 0.7 * sS, 0.0, 1.0) * spikeMask * vOpa.x;
+      float aSpike = clamp(0.9 * sL + 0.7 * sS, 0.0, 1.0) * spikeMask * vOpa.x * spikeGate;
       col = srcOver(vec4(spikeCol, aSpike), col);
     }
 
+    // glow (corona, bloom, spikes): depth x haloOpa x tierMult (PORT_LOG C2);
+    // body (heart, body, pin): depth x tierMult - the heart is not dimmed by
+    // the tier's halo opacity
+    col.a *= vMult;
+    body.a *= vMultBody;
+    vec4 outc = srcOver(body, col);
+
     // depth desaturation - config-gated, default 0 (ruling 7.6)
     if (uDesat > 0.0) {
-      float lum = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
-      col.rgb = mix(col.rgb, vec3(lum), uDesat * (1.0 - vMult));
+      float lum = dot(outc.rgb, vec3(0.2126, 0.7152, 0.0722));
+      outc.rgb = mix(outc.rgb, vec3(lum), uDesat * (1.0 - vMult));
     }
 
-    gl_FragColor = vec4(col.rgb, col.a * vMult);
+    gl_FragColor = outc;
     // Prototype parity: canvas textures uploaded without sRGB decode, then
     // converted linear->sRGB at output - stars render as the OETF-brightened
     // hex values (verified vs make-screenshot-1: #4DA8FF disc = ~rgb(142,204,255)).
@@ -204,8 +296,25 @@ export function createStarMaterial(): ShaderMaterial {
       uAnchor: { value: 0 },   // 1 = anchor-role dominance treatment (§6)
       uCoronaMult: { value: 1 },
       uSpikeLen: { value: NCONF.anchor.spikeLength },
+      uTime: { value: 0 },
+      uMomentumGlow: { value: NCONF.momentum.glow },
+      uPulsePeriod: { value: NCONF.momentum.pulsePeriod },
+      uPulseRateBoost: { value: NCONF.momentum.pulseRateBoost },
+      uTanHalfFov: { value: Math.tan((NCONF.camera.fov * Math.PI) / 360) },
+      uGlowFadeStart: { value: NCONF.render.glowFadeStart },
+      uGlowFadeEnd: { value: NCONF.render.glowFadeEnd },
       uBody: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].body)).flat() },
       uHalo: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].halo)).flat() },
+      uCore: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].core)).flat() },
+      uMid: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].mid)).flat() },
+      uCoreRim: { value: NCONF.render.coreRim },
+      uBlaze: { value: NCONF.render.blaze },
+      uBlazeSpread: { value: NCONF.render.blazeSpread },
+      uSpikeAbove: { value: NCONF.render.spikeAbove },
+      uSpikeScale: { value: NCONF.render.spikeScale },
+      uCoreStrength: { value: NCONF.render.coreStrength },
+      uCoreSize: { value: NCONF.render.coreSize },
+      uDiscEdge: { value: NCONF.render.discEdge },
     },
     transparent: true,
     blending: AdditiveBlending,
@@ -215,8 +324,18 @@ export function createStarMaterial(): ShaderMaterial {
   })
 }
 
-/** Refresh the live-tunable uniforms from NCONF - call once per frame. O(1). */
-export function syncStarUniforms(mat: ShaderMaterial): void {
+/**
+ * Refresh the live-tunable uniforms from NCONF - call once per frame. O(1).
+ * `timeSec` drives the momentum pulse; omit it (beads) and nothing moves.
+ */
+export function syncStarUniforms(mat: ShaderMaterial, timeSec?: number): void {
+  if (timeSec !== undefined) mat.uniforms.uTime.value = timeSec
+  mat.uniforms.uMomentumGlow.value = NCONF.momentum.glow
+  mat.uniforms.uPulsePeriod.value = Math.max(0.1, NCONF.momentum.pulsePeriod)
+  mat.uniforms.uPulseRateBoost.value = NCONF.momentum.pulseRateBoost
+  mat.uniforms.uGlowFadeStart.value = NCONF.render.glowFadeStart
+  // smoothstep needs edge0 < edge1 - keep the sliders from inverting it
+  mat.uniforms.uGlowFadeEnd.value = Math.max(NCONF.render.glowFadeStart + 0.01, NCONF.render.glowFadeEnd)
   mat.uniforms.uR.value = NCONF.generation.R
   mat.uniforms.uRangeMult.value = NCONF.depth.rangeMult
   mat.uniforms.uFloor.value = NCONF.depth.opacityFloor
@@ -224,6 +343,15 @@ export function syncStarUniforms(mat: ShaderMaterial): void {
   mat.uniforms.uSpriteScale.value = NCONF.render.spriteScale
   mat.uniforms.uBokehScale.value = NCONF.render.bokehScale
   mat.uniforms.uDesat.value = NCONF.depth.desatStrength
+  mat.uniforms.uCoreStrength.value = NCONF.render.coreStrength
+  mat.uniforms.uCoreSize.value = Math.max(0.05, NCONF.render.coreSize)
+  mat.uniforms.uDiscEdge.value = Math.max(1.01, NCONF.render.discEdge)
+  mat.uniforms.uCoreRim.value = NCONF.render.coreRim
+  mat.uniforms.uSpikeAbove.value = NCONF.render.spikeAbove
+  mat.uniforms.uSpikeScale.value = NCONF.render.spikeScale
+  // blaze/spread are per-material so the anchor can opt out (see NeuralScene)
+  if (mat.uniforms.uBlaze.value !== 0) mat.uniforms.uBlaze.value = NCONF.render.blaze
+  if (mat.uniforms.uBlazeSpread.value !== 0) mat.uniforms.uBlazeSpread.value = NCONF.render.blazeSpread
   mat.uniforms.uAffordanceLift.value = NCONF.select.affordanceLift
 }
 
@@ -242,9 +370,17 @@ export function buildStarGeometry(instances: readonly StarInstance[]): Instanced
   const opa = new Float32Array(n * 3)
   const bokeh = new Float32Array(n)
   const state = new Float32Array(n)
+  const phase = new Float32Array(n)
+  const momentum = new Float32Array(n)
+  const rallies = new Float32Array(n)
 
   for (let i = 0; i < n; i++) {
     const inst = instances[i]
+    // deterministic golden-ratio stagger for the momentum pulse (no RNG,
+    // not part of the layout hash)
+    phase[i] = (i * 0.6180339887) % 1
+    momentum[i] = inst.momentum ?? 0
+    rallies[i] = inst.rallies ?? 0
     pos[i * 3] = inst.pos.x
     pos[i * 3 + 1] = inst.pos.y
     pos[i * 3 + 2] = inst.pos.z
@@ -264,6 +400,9 @@ export function buildStarGeometry(instances: readonly StarInstance[]): Instanced
   geo.setAttribute('iOpa', new InstancedBufferAttribute(opa, 3))
   geo.setAttribute('iBokeh', new InstancedBufferAttribute(bokeh, 1))
   geo.setAttribute('iState', new InstancedBufferAttribute(state, 1))
+  geo.setAttribute('iPhase', new InstancedBufferAttribute(phase, 1))
+  geo.setAttribute('iMomentum', new InstancedBufferAttribute(momentum, 1))
+  geo.setAttribute('iRallies', new InstancedBufferAttribute(rallies, 1))
   return geo
 }
 

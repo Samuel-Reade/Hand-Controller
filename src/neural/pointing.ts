@@ -211,25 +211,28 @@ export function createHighlightState(): HighlightState {
 }
 
 /**
- * Nearest to centre, with the §1 depth tie-break: inside `tieBandPx` the
- * two are treated as equally central and the one NEARER THE CAMERA wins -
- * it is the one you would visually say you were pointing at. Far-side
- * nodes (w <= 0) never compete.
+ * Nearest to centre, with the §1 depth tie-break: inside `tieBandPx` OF THE
+ * NEAREST the candidates are treated as equally central and the one NEARER
+ * THE CAMERA wins - it is the one you would visually say you were pointing
+ * at. Far-side nodes (w <= 0) never compete.
+ *
+ * Two passes on purpose. A single pass that compares each candidate with the
+ * running best lets ties CHAIN (A -> C inside the band of A, then B inside
+ * the band of C) and walk more than a band away from the true argmin - it
+ * surfaced the moment clusters got denser (a 27 px node beat a 17 px one on
+ * a 10 px band). The band is relative to the minimum, never transitive.
  */
 export function bestCandidate(
   cands: readonly HighlightCandidate[],
   tieBandPx: number = NCONF.point.tieBandPx,
 ): HighlightCandidate | null {
+  let min = Infinity
+  for (const c of cands) if (c.w > 0 && c.dist < min) min = c.dist
+  if (min === Infinity) return null
   let best: HighlightCandidate | null = null
   for (const c of cands) {
-    if (c.w <= 0) continue
-    if (!best) {
-      best = c
-      continue
-    }
-    const dd = c.dist - best.dist
-    if (dd < -tieBandPx) best = c
-    else if (Math.abs(dd) <= tieBandPx && c.w > best.w) best = c
+    if (c.w <= 0 || c.dist > min + tieBandPx) continue
+    if (!best || c.w > best.w) best = c
   }
   return best
 }

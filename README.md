@@ -21,6 +21,25 @@ docs/DECISIONS.md for build choices.
   `node scripts/verify-pointing.mjs` - machine gates against a running dev
   server (pass `--use-angle=metal` fps gates)
 
+Visual + salience passes (2026-09-09): glow fades with on-screen size so
+zoom never washes the frame; the backdrop rides with the camera; the neural
+scene shows one reticle (the sight, ring hugging the star). Motion is the
+The field has Rally's shape: ~160 main posts (shouts) on the brain at random
+distances within limits (0.6-1.35 R), echoes one level deep - several on a
+popular post (a conversation), rarely on a minor one - and nothing deeper. RALLY §5 channels on PLACEHOLDER
+data until shout analytics exist: SIZE and glow = cumulative rallies
+(`src/neural/rallies.ts`: two bands - most posts minor and dim, a popular
+minority big and bright; rolled up parent >= children per §3; a post's spoke
+follows its traction), MOMENTUM = motion (`src/neural/momentum.ts`, ~10% of
+posts pulse and their trails carry an inward energy band; the rest are
+still). Discs are lit like stars (hot core-white heart, saturated rim); popular posts
+blaze wider and brighter and the top band carries the anchor's diffraction
+spikes.
+Geometry never moves. Clusters are tight (children scatter half as far as
+the prototype's spray - `tests/cluster.test.ts` pins it; "neural cluster"
+sliders). `verify-neural.mjs` asserts the background stays dark at a real
+7x zoom.
+
 The neural scene runs the shared physics on its own FEEL profile
 (`src/neural/profile.ts`: no free detent, fast settle, persistent zoom, camera
 outside the field); `?scene=globe` keeps the base FEEL.

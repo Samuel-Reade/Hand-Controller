@@ -41,10 +41,12 @@ import { nearestOrbitIndex, rotateYawPitch } from '../orb/geometry'
 import type { Vec3 } from '../orb/geometry'
 import { applyInputEvent, orbRuntime, stepPhysics } from '../orb/useOrbPhysics'
 import { useStore } from '../store'
-import { NCONF, generationTuple, tupleHash } from './config'
+import { NCONF, generationTuple, ringRadiusPx, tupleHash } from './config'
 import { buildGraph, layoutHash, nodePosition } from './graph'
 import type { NeuralNode } from './graph'
+import { momentumFor } from './momentum'
 import { PAL } from './palette'
+import { computeRallies, diamFor, opaFor } from './rallies'
 import {
   candidatesFor,
   createHighlightState,
@@ -71,6 +73,10 @@ if (import.meta.hot) {
 declare global {
   interface Window {
     __nconf?: typeof NCONF
+    /** DEV seam for gates: drive the persistent zoom base directly, the way a
+     *  finished two-hand gesture would leave it. camera.z stays the rest
+     *  distance, so this exercises the REAL dolly path (backdrop, glow fade). */
+    __neuralDev?: { setZoom: (factor: number) => void }
     __neuralInfo?: {
       drawCalls: number
       fps: number
@@ -188,6 +194,10 @@ function disposeMesh(mesh: Mesh): void {
 
 const BEAD_DIAM = 6
 const BEAD_OPA = [1, 1, 1] as const
+// Backdrop plane depths at the REST view (world z with the camera at
+// NCONF.camera.z). useFrame keeps them at this distance from the camera.
+const WASH_Z = -1200
+const WARM_Z = -1100
 const TAN_HALF_FOV = Math.tan((52 / 2) * (Math.PI / 180))
 const UP = new Vector3(0, 1, 0)
 const FALLBACK = new Vector3(1, 0, 0)
@@ -213,15 +223,19 @@ function reportTrailSpecs(
     const perp = new Vector3().crossVectors(chord, UP).normalize()
     if (perp.lengthSq() < 0.01) perp.crossVectors(chord, FALLBACK).normalize()
     const sign = Math.sin(item.phi * 7.3 + item.theta) > 0 ? 1 : -1
+    const childName = `report_${item.orbitIndex}_${item.itemIndex}`
     specs.push({
       pSurf,
       ctrl: mid.addScaledVector(perp, chord.length() * NCONF.trail.bendFraction * sign),
       cSurf,
       radius: NCONF.trail.radByTier.hub,
+      parentName: 'anchor',
       parentTier: 'hub',
       parentBody: new Color(PAL[anchorHue].body),
       childBody: new Color(PAL[anchorHue].body),
-      childName: `report_${item.orbitIndex}_${item.itemIndex}`,
+      childName,
+      childMomentum: momentumFor(childName),
+      weight: 1,
     })
   }
   return specs
@@ -295,13 +309,75 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     bokehOpacity: slider(() => NCONF.render.bokehOpacity, (v) => { NCONF.render.bokehOpacity = v }, 0, 1, 0.01),
     opacityFloor: slider(() => NCONF.depth.opacityFloor, (v) => { NCONF.depth.opacityFloor = v }, 0, 1, 0.01),
     desatStrength: slider(() => NCONF.depth.desatStrength, (v) => { NCONF.depth.desatStrength = v }, 0, 1, 0.01),
+    // visual pass: zoom-invariant glow
+    glowFadeStart: slider(() => NCONF.render.glowFadeStart, (v) => { NCONF.render.glowFadeStart = v }, 0.1, 1.5, 0.01),
+    glowFadeEnd: slider(() => NCONF.render.glowFadeEnd, (v) => { NCONF.render.glowFadeEnd = v }, 0.2, 3, 0.01),
+    // star cores (0 = ruling-7.1 flat disc)
+    coreStrength: slider(() => NCONF.render.coreStrength, (v) => { NCONF.render.coreStrength = v }, 0, 1, 0.01),
+    coreSize: slider(() => NCONF.render.coreSize, (v) => { NCONF.render.coreSize = v }, 0.15, 0.8, 0.01),
+    discEdge: slider(() => NCONF.render.discEdge, (v) => { NCONF.render.discEdge = v }, 1.02, 2, 0.01),
+    coreRim: slider(() => NCONF.render.coreRim, (v) => { NCONF.render.coreRim = v }, 0, 1, 0.01),
+    // "powerful": rallies-driven blaze + spikes for the top posts
+    blaze: slider(() => NCONF.render.blaze, (v) => { NCONF.render.blaze = v }, 0, 3, 0.05),
+    blazeSpread: slider(() => NCONF.render.blazeSpread, (v) => { NCONF.render.blazeSpread = v }, 0, 1.5, 0.05),
+    spikeAbove: slider(() => NCONF.render.spikeAbove, (v) => { NCONF.render.spikeAbove = v }, 0.3, 1.01, 0.01),
+    spikeScale: slider(() => NCONF.render.spikeScale, (v) => { NCONF.render.spikeScale = v }, 0.1, 1, 0.01),
+  })
+
+  // RALLY §5 SIZE = cumulative rallies - PLACEHOLDER data (rallies.ts) until
+  // shout analytics exist. All four change per-instance size -> rebuild.
+  useControls('neural rallies (placeholder)', {
+    popularFraction: rebuildSlider(() => NCONF.rallies.popularFraction, (v) => { NCONF.rallies.popularFraction = v }, 0, 0.5, 0.01),
+    minorMax: rebuildSlider(() => NCONF.rallies.minorMax, (v) => { NCONF.rallies.minorMax = v }, 0.02, 0.5, 0.01),
+    popularMin: rebuildSlider(() => NCONF.rallies.popularMin, (v) => { NCONF.rallies.popularMin = v }, 0.1, 0.9, 0.01),
+    sizeGamma: rebuildSlider(() => NCONF.rallies.sizeGamma, (v) => { NCONF.rallies.sizeGamma = v }, 0.2, 1, 0.01),
+    diamMin: rebuildSlider(() => NCONF.rallies.diamMin, (v) => { NCONF.rallies.diamMin = v }, 6, 40, 1),
+    diamMax: rebuildSlider(() => NCONF.rallies.diamMax, (v) => { NCONF.rallies.diamMax = v }, 40, 160, 1),
+  })
+
+  // RALLY §5 momentum channel - PLACEHOLDER data (momentum.ts) until shout
+  // analytics exist. movingFraction changes WHICH nodes move -> attribute rebuild.
+  useControls('neural momentum (placeholder)', {
+    movingFraction: rebuildSlider(() => NCONF.momentum.movingFraction, (v) => { NCONF.momentum.movingFraction = v }, 0, 1, 0.01),
+    glow: slider(() => NCONF.momentum.glow, (v) => { NCONF.momentum.glow = v }, 0, 1.5, 0.01),
+    pulsePeriod: slider(() => NCONF.momentum.pulsePeriod, (v) => { NCONF.momentum.pulsePeriod = v }, 1, 20, 0.1),
+    pulseRateBoost: slider(() => NCONF.momentum.pulseRateBoost, (v) => { NCONF.momentum.pulseRateBoost = v }, 0, 4, 0.05),
   })
 
   useControls('neural generation', {
     seed: rebuildSlider(() => NCONF.generation.seed, (v) => { NCONF.generation.seed = v }, 1, 99999999, 1),
-    hubCount: rebuildSlider(() => NCONF.generation.hubCount, (v) => { NCONF.generation.hubCount = v }, 4, 40, 1),
+    hubCount: rebuildSlider(() => NCONF.generation.hubCount, (v) => { NCONF.generation.hubCount = v }, 4, 400, 1),
     R: rebuildSlider(() => NCONF.generation.R, (v) => { NCONF.generation.R = v }, 400, 1800, 10),
     redProbability: rebuildSlider(() => NCONF.generation.redProbability, (v) => { NCONF.generation.redProbability = v }, 0, 1, 0.01),
+    // brain -> post distance limits (x R)
+    hubRadialMin: rebuildSlider(() => NCONF.generation.hubRadialMin, (v) => { NCONF.generation.hubRadialMin = v }, 0.3, 1.2, 0.01),
+    hubRadialMax: rebuildSlider(() => NCONF.generation.hubRadialMax, (v) => { NCONF.generation.hubRadialMax = v }, 0.8, 1.8, 0.01),
+    // echoes by traction: popular posts become conversations
+    echoesByTraction: {
+      value: NCONF.generation.echoesByTraction,
+      onChange: (v: boolean) => {
+        if (v === NCONF.generation.echoesByTraction) return
+        NCONF.generation.echoesByTraction = v
+        regenRef.current()
+      },
+    },
+    popularEchoMin: rebuildSlider(() => NCONF.generation.popularEchoMin, (v) => { NCONF.generation.popularEchoMin = v }, 0, 10, 1),
+    popularEchoMax: rebuildSlider(() => NCONF.generation.popularEchoMax, (v) => { NCONF.generation.popularEchoMax = v }, 0, 12, 1),
+  })
+
+  // Cluster tightness: how far children scatter from their parent (angular
+  // jitter, rad) and how far out they sit (radial x parent r). Generation
+  // params, so each change rebuilds the layout (hash changes).
+  useControls('neural cluster', {
+    nodeJitter: rebuildSlider(() => NCONF.generation.nodeJitter, (v) => { NCONF.generation.nodeJitter = v }, 0.02, 0.5, 0.01),
+    nodeRadialMin: rebuildSlider(() => NCONF.generation.nodeRadialMin, (v) => { NCONF.generation.nodeRadialMin = v }, 0.9, 1.3, 0.01),
+    nodeRadialMax: rebuildSlider(() => NCONF.generation.nodeRadialMax, (v) => { NCONF.generation.nodeRadialMax = v }, 0.9, 1.4, 0.01),
+    subJitter: rebuildSlider(() => NCONF.generation.subJitter, (v) => { NCONF.generation.subJitter = v }, 0.02, 0.5, 0.01),
+    subRadialMin: rebuildSlider(() => NCONF.generation.subRadialMin, (v) => { NCONF.generation.subRadialMin = v }, 0.9, 1.3, 0.01),
+    subRadialMax: rebuildSlider(() => NCONF.generation.subRadialMax, (v) => { NCONF.generation.subRadialMax = v }, 0.9, 1.4, 0.01),
+    terminalJitter: rebuildSlider(() => NCONF.generation.terminalJitter, (v) => { NCONF.generation.terminalJitter = v }, 0.02, 0.6, 0.01),
+    terminalRadialMin: rebuildSlider(() => NCONF.generation.terminalRadialMin, (v) => { NCONF.generation.terminalRadialMin = v }, 0.9, 1.3, 0.01),
+    terminalRadialMax: rebuildSlider(() => NCONF.generation.terminalRadialMax, (v) => { NCONF.generation.terminalRadialMax = v }, 0.9, 1.4, 0.01),
   })
 
   useControls('neural trail', {
@@ -318,6 +394,20 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       value: NCONF.trail.pulseEnabled,
       onChange: (v: boolean) => { NCONF.trail.pulseEnabled = v },
     },
+    // visual pass: energy flow along every trail (+ the 7.10 hot dots' direction)
+    flowEnabled: {
+      value: NCONF.trail.flowEnabled,
+      onChange: (v: boolean) => { NCONF.trail.flowEnabled = v },
+    },
+    flowInward: {
+      value: NCONF.trail.flowInward,
+      onChange: (v: boolean) => { NCONF.trail.flowInward = v },
+    },
+    flowGain: slider(() => NCONF.trail.flowGain, (v) => { NCONF.trail.flowGain = v }, 0, 3, 0.05),
+    flowWidth: slider(() => NCONF.trail.flowWidth, (v) => { NCONF.trail.flowWidth = v }, 0.01, 0.3, 0.005),
+    flowPeriod: slider(() => NCONF.trail.flowPeriod, (v) => { NCONF.trail.flowPeriod = v }, 1, 20, 0.1),
+    spokeMinWeight: rebuildSlider(() => NCONF.trail.spokeMinWeight, (v) => { NCONF.trail.spokeMinWeight = v }, 0, 1, 0.01),
+    endInset: rebuildSlider(() => NCONF.trail.endInset, (v) => { NCONF.trail.endInset = v }, 0, 1.5, 0.05),
   })
 
   useControls('neural anchor', {
@@ -360,10 +450,10 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
 
   const environment = useMemo(() => {
     const wash = envMesh(WASH_FRAG, 7000, 5000)
-    wash.position.z = -1200
+    wash.position.z = WASH_Z
     wash.renderOrder = -10
     const warm = envMesh(WARM_FRAG, 2800, 2200)
-    warm.position.set(-550, 350, -1100)
+    warm.position.set(-550, 350, WARM_Z)
     warm.renderOrder = -9
     const grain = new Mesh(
       new PlaneGeometry(2, 2),
@@ -383,6 +473,12 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
 
   const built = useMemo(() => {
     const nodes = buildGraph()
+    // RALLY §5: SIZE = cumulative rallies (placeholder source, rallies.ts).
+    // Tier is structure only from here on; the brain keeps anchor.brainDiam.
+    const rallies = computeRallies(nodes)
+    const diamByName = new Map(
+      nodes.map((n) => [n.name, n.tier === 'brain' ? NCONF.anchor.brainDiam : diamFor(rallies.get(n.name) ?? 0)]),
+    )
     const instances: StarInstance[] = []
     const hubInstanceIndices: number[] = []
     const hubNodes: NeuralNode[] = []
@@ -393,20 +489,33 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         hubNodes.push(n)
       }
       const [x, y, z] = nodePosition(n)
-      instances.push({ pos: new Vector3(x, y, z), tier: n.tier, hue: n.hue, isBokeh: n.isBokeh })
+      const r = rallies.get(n.name) ?? 0
+      instances.push({
+        pos: new Vector3(x, y, z),
+        tier: n.tier,
+        hue: n.hue,
+        isBokeh: n.isBokeh,
+        diam: diamByName.get(n.name),
+        opa: opaFor(r),
+        rallies: r,
+        momentum: momentumFor(n.name), // RALLY §5 motion channel (placeholder data)
+      })
     }
     const starMesh = createStarMesh(instances)
     starMesh.renderOrder = 1
 
     const brainMesh = createStarMesh([
-      { pos: new Vector3(0, 0, 0), tier: 'brain', hue: 'violet', diam: NCONF.anchor.brainDiam },
+      { pos: new Vector3(0, 0, 0), tier: 'brain', hue: 'violet', diam: NCONF.anchor.brainDiam, rallies: 1 },
     ])
     const brainMat = brainMesh.material as ShaderMaterial
     brainMat.uniforms.uTierMult.value = 1.0
     brainMat.uniforms.uAnchor.value = 1
+    // the anchor's dominance is §6's (coronaMult + spikes); blaze is for posts
+    brainMat.uniforms.uBlaze.value = 0
+    brainMat.uniforms.uBlazeSpread.value = 0
     brainMesh.renderOrder = 10
 
-    const specs = buildTrailSpecs(nodes)
+    const specs = buildTrailSpecs(nodes, NCONF, (n) => diamByName.get(n.name)!, (n) => rallies.get(n.name) ?? 0)
     const trails = buildTrailMeshes(specs)
 
     const beadInstances: StarInstance[] = []
@@ -433,6 +542,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       nodes,
       targetable,
       nodesByName,
+      diamByName,
       starMesh,
       brainMesh,
       trails,
@@ -467,6 +577,18 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
 
   // Two-hand zoom view (ORB_ZOOM_SPEC): pure model, stepped in useFrame.
   const zoomView = useRef(createZoomView()).current
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    window.__neuralDev = {
+      setZoom: (factor) => {
+        zoomView.base = Math.max(FEEL.zoomMin, Math.min(FEEL.zoomMax, factor))
+        zoomView.hand = 1
+      },
+    }
+    return () => {
+      delete window.__neuralDev
+    }
+  }, [zoomView])
 
   // Crosshair highlight (ORB_SELECT_SPEC PT1). Read-only: the state is
   // published for the overlay and telemetry and drives NOTHING else - the
@@ -520,6 +642,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         pos: hubLocal.clone().add(new Vector3(...(item.local as Vec3))),
         tier: 'node',
         hue: hubNode.hue,
+        rallies: 0.5, // shell placeholder: a lit, medium core
+        momentum: momentumFor(`report_${item.orbitIndex}_${item.itemIndex}`),
       }))
       const reportMesh = createStarMesh(reportInstances)
       reportMesh.renderOrder = 5
@@ -531,6 +655,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       const roleMat = roleMesh.material as ShaderMaterial
       roleMat.uniforms.uTierMult.value = 1.0
       roleMat.uniforms.uAnchor.value = 1
+      roleMat.uniforms.uBlaze.value = 0
+      roleMat.uniforms.uBlazeSpread.value = 0
       roleMesh.renderOrder = 11
       d.reportMesh = reportMesh
       d.reportTrails = reportTrails
@@ -677,21 +803,32 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     zoomRuntime.displayed = zf
     zoomRuntime.level = d.target
 
-    // Uniform sync (O(1) - no per-node JS).
-    syncStarUniforms(built.starMesh.material as ShaderMaterial)
+    // The backdrop planes ride with the camera at their rest-view distance:
+    // they are a backdrop, not a wall. Fixed in world space, the dolly flew
+    // INTO them and the black went blue-grey (background luminance 4 -> 69
+    // /255 between 1x and 7x). At zoom 1 this is exactly where they always were.
+    const camZ = state.camera.position.z
+    environment.wash.position.z = camZ - NCONF.camera.z + WASH_Z
+    environment.warm.position.z = camZ - NCONF.camera.z + WARM_Z
+
+    // Uniform sync (O(1) - no per-node JS). The clock drives the momentum
+    // pulse and the trail energy bands in the shaders; beads stay still.
+    const tSec = state.clock.elapsedTime
+    syncStarUniforms(built.starMesh.material as ShaderMaterial, tSec)
     syncStarUniforms(built.beadMesh.material as ShaderMaterial)
     syncTrailUniforms(
       built.trails.core.material as ShaderMaterial,
       built.trails.glow.material as ShaderMaterial,
+      tSec,
     )
-    syncPulseUniforms(built.pulseMesh.material as ShaderMaterial, state.clock.elapsedTime)
+    syncPulseUniforms(built.pulseMesh.material as ShaderMaterial, tSec)
 
     // Anchor ROLE: brain holds it at level 0; the drilled hub inherits it
     // (spikes + corona boost + pulse) while it is the anchor (§6.4).
     const pulseT = state.clock.elapsedTime * 60 * NCONF.brainPulse.rate
     const pulse = 1 + NCONF.brainPulse.amp * (0.5 + 0.5 * Math.sin(pulseT))
     const brainMat = built.brainMesh.material as ShaderMaterial
-    syncStarUniforms(brainMat)
+    syncStarUniforms(brainMat, tSec)
     const brainHolds = d.level === 0
     brainMat.uniforms.uAnchor.value = brainHolds ? 1 : 0
     brainMat.uniforms.uCoronaMult.value = brainHolds ? NCONF.anchor.coronaMult : 1
@@ -699,16 +836,17 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     brainMat.uniforms.uScaleMult.value = brainHolds ? pulse : 1
     if (d.roleMesh) {
       const roleMat = d.roleMesh.material as ShaderMaterial
-      syncStarUniforms(roleMat)
+      syncStarUniforms(roleMat, tSec)
       roleMat.uniforms.uCoronaMult.value = NCONF.anchor.coronaMult
       roleMat.uniforms.uSpikeLen.value = NCONF.anchor.spikeLength
       roleMat.uniforms.uScaleMult.value = pulse
     }
-    if (d.reportMesh) syncStarUniforms(d.reportMesh.material as ShaderMaterial)
+    if (d.reportMesh) syncStarUniforms(d.reportMesh.material as ShaderMaterial, tSec)
     if (d.reportTrails) {
       syncTrailUniforms(
         d.reportTrails.core.material as ShaderMaterial,
         d.reportTrails.glow.material as ShaderMaterial,
+        tSec,
       )
     }
 
@@ -749,14 +887,15 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         pointRuntime.y = p.y
         pointRuntime.tier = node.tier
         pointRuntime.hue = PAL[node.hue].body
-        // The star is a view-space billboard of world size
-        // diam x spriteScale, so its projected RADIUS is half of that
-        // through the same focal term the projection uses.
+        // The star is a view-space billboard of world size diam x spriteScale;
+        // its solid disc is DISC_FRACTION of that. The ring hugs the DISC
+        // through the same focal term the projection uses, and there is no
+        // ring for the anchor fallback (ringRadiusPx).
         const focal = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
-        const diam =
-          node.tier === 'brain' ? NCONF.anchor.brainDiam : NCONF.render.tierDiam[node.tier]
-        pointRuntime.ringR =
-          ((diam * NCONF.render.spriteScale) / 2) * (focal / p.w) * NCONF.point.highlightSwell
+        const diam = built.diamByName.get(node.name) ?? NCONF.render.tierDiam[node.tier]
+        pointRuntime.ringR = ringRadiusPx(
+          node.tier, diam, NCONF.render.spriteScale, focal, p.w, NCONF.point.highlightSwell,
+        )
       } else {
         pointRuntime.tier = ''
         pointRuntime.ringR = 0

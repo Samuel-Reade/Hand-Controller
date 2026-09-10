@@ -268,6 +268,18 @@ describe('3. tolerance', () => {
 })
 
 describe('4. depthTie', () => {
+  it('the band is relative to the NEAREST, never transitive (no chained ties)', () => {
+    // regression: A 17px, C 22px (nearer camera), B 27px (nearest camera).
+    // C is inside the band of A; B is inside the band of C but NOT of A.
+    // A running-best comparison walked A -> C -> B and highlighted a node
+    // 10.4px past the nearest on a 10px band.
+    const band = NCONF.point.tieBandPx
+    const A = { name: 'A', dist: 17, w: 1000 }
+    const C = { name: 'C', dist: 17 + band * 0.5, w: 2000 }
+    const B = { name: 'B', dist: 17 + band * 1.04, w: 3000 }
+    expect(bestCandidate([A, C, B], band)!.name).toBe('C')
+    expect(bestCandidate([B, C, A], band)!.name).toBe('C') // order-independent
+  })
   it('inside tieBandPx the nearer-camera node wins; outside it, distance wins', () => {
     const near = { name: 'near', dist: 20 + NCONF.point.tieBandPx - 1, w: 2000 }
     const far = { name: 'far', dist: 20, w: 100 }

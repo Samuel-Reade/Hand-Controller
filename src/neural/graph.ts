@@ -15,6 +15,7 @@ import { NCONF } from './config'
 import type { NeuralConfig } from './config'
 import { HUE_INDEX } from './palette'
 import type { NeuralHue, NeuralTier } from './palette'
+import { ownRallies } from './rallies'
 
 export interface NeuralNode {
   name: string
@@ -65,8 +66,14 @@ export function buildGraph(cfg: NeuralConfig = NCONF): NeuralNode[] {
     const theta = Math.PI * (1 + Math.sqrt(5)) * i + rng(-g.hubJitterTheta, g.hubJitterTheta)
     const h = add(`n_h${i}`, 'hub', phi, theta, g.R * rng(g.hubRadialMin, g.hubRadialMax), 'brain')
 
+    // Echo count by the post's own traction (config.echoesByTraction): a
+    // popular post is a conversation. ownRallies is a name hash - it draws
+    // nothing from the layout RNG - so only the loop bound differs from P0.
+    const popular = g.echoesByTraction && ownRallies(h.name, cfg.rallies) >= cfg.rallies.popularMin
+    const eMin = popular ? g.popularEchoMin : g.nodesPerHubMin
+    const eMax = popular ? g.popularEchoMax : g.nodesPerHubMax
     // Prototype quirk, kept deliberately: the bound is re-drawn each check.
-    for (let j = 0; j < Math.round(rng(g.nodesPerHubMin, g.nodesPerHubMax)); j++) {
+    for (let j = 0; j < Math.round(rng(eMin, eMax)); j++) {
       const nd = add(`${h.name}_n${j}`, 'node',
         phi + rng(-g.nodeJitter, g.nodeJitter),
         theta + rng(-g.nodeJitter, g.nodeJitter),

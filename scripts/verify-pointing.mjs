@@ -18,6 +18,7 @@ import { chromium } from 'playwright'
 const base = process.argv[2] ?? 'http://localhost:5173'
 const outDir = process.argv[3] ?? 'shots'
 const ACQUIRE_RADIUS = 46 // NCONF.point.acquireRadius default
+const RELEASE_RADIUS = 88 // NCONF.point.releaseRadius default - hysteresis HOLDS a node out to here
 
 const browser = await chromium.launch({ args: ['--use-angle=metal'] })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
@@ -83,16 +84,21 @@ await browser.close()
 const stateAgrees = samples.every((s) =>
   s.i?.pointed ? s.sight === 'acquired' || s.sight === 'confirming' : s.sight === 'idle',
 )
+// Steady-state invariant: acquisition happens inside acquireRadius, but the
+// §1 hysteresis then holds the node out to releaseRadius - with 160 posts a
+// node acquired at one detent is often still held at the next, so a sample
+// may legitimately read 46..88 px. Never beyond releaseRadius.
 const distancesSane = samples.every(
-  (s) => !s.i?.pointed || s.i.pointedDist <= ACQUIRE_RADIUS || s.i.pointed === 'brain',
+  (s) => !s.i?.pointed || s.i.pointedDist <= RELEASE_RADIUS || s.i.pointed === 'brain',
 )
+const acquiredTight = samples.filter((s) => s.i?.pointed && s.i.pointed !== 'brain' && s.i.pointedDist <= ACQUIRE_RADIUS).length
 const fps = Math.min(...samples.map((s) => s.i?.fps ?? 0))
 
 const checks = [
   ['no page errors', errors.length === 0],
   ['sight mounts in the neural scene', samples[0].sight !== 'absent'],
   ['DOM state always agrees with the published highlight', stateAgrees],
-  [`acquired highlights are inside acquireRadius (${ACQUIRE_RADIUS}px)`, distancesSane],
+  [`highlights never exceed releaseRadius (${RELEASE_RADIUS}px; ${acquiredTight} samples inside acquireRadius ${ACQUIRE_RADIUS})`, distancesSane],
   [
     `ordinary (non-anchor) nodes are reachable by rotating (${acquiredOrdinary.length}/${samples.length} samples)`,
     acquiredOrdinary.length > 0,
