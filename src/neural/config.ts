@@ -155,6 +155,15 @@ export interface NeuralConfig {
     anchorWinsBelow: number    // reticle: anchor is the candidate below this w
     affordanceLift: number     // halo lift on the reticle candidate
     maxDepth: number           // ORB_SELECT_SPEC §5: Infinity = full tree; 1 = P5 two-level cap
+    // Mouse hit-test (click-to-centre). The solid disc is under 2 px for a
+    // minor post at rest zoom while its glow reads far larger, so the hit
+    // radius is the disc times the glow multiplier, never below the floor.
+    clickRadiusMult: number    // hit radius = disc radius x this (the visible glow)
+    clickMinRadiusPx: number   // ...and never smaller than this, in px
+    centerPush: number         // wu - the camera comes this much closer to a centred node (orbit radius)
+    markGapPx: number          // selection marker: the gap at the node's centre the arms start from
+    markMinPx: number          // selection marker: minimum half-size, so a minor post still shows one
+    markScale: number          // selection marker: half-size as a fraction of the node's visible radius
   }
   point: PointConfig
 }
@@ -276,6 +285,13 @@ export const NCONF: NeuralConfig = {
     anchorWinsBelow: 0.92,
     affordanceLift: 0.35,
     maxDepth: Infinity,
+    clickRadiusMult: 2.5,
+    clickMinRadiusPx: 14,
+    // 4600 - 3000 = 1600 wu from a selected node (2.9x); home stays at 4600.
+    centerPush: 3000,
+    markGapPx: 2,
+    markMinPx: 5,
+    markScale: 0.5,
   },
   point: {
     crosshairSize:    7,

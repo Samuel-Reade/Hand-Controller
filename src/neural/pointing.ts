@@ -372,3 +372,54 @@ export const pointRuntime = {
   /** how many nodes are targetable at all - a sanity number for the gate */
   targetableCount: 0,
 }
+
+// ── Click hit-test (mouse pointing, docs/DECISIONS.md click-to-centre) ──────
+
+export interface HitCandidate {
+  name: string
+  /** px from the click point to the node's projected centre */
+  dist: number
+  /** the node's hit radius in px */
+  r: number
+  w: number
+}
+
+/**
+ * Which node's projected disc contains the click point (px, py) - px from
+ * screen centre, +x right / +y down, the projection's own frame.
+ *
+ * ANY node competes, targetable or not: centring is navigation, not a
+ * confirm, so the §2 targetable filter does not apply here. `radiusPx` is
+ * the node's HIT radius at depth `w` - the scene derives it from the
+ * projected disc with a glow multiplier and a px floor, so a minor post is
+ * as clickable as its glow looks. Overlapping hit discs resolve to the one
+ * the click is MOST CENTRED on (smallest dist / r) - the node the user aimed
+ * at - and an exact tie goes to the nearer-camera node (smaller w).
+ * Far-side nodes (w <= 0) are never hit.
+ */
+export function hitTestNodes(
+  nodes: readonly NeuralNode[],
+  yaw: number,
+  pitch: number,
+  view: ViewSpec,
+  px: number,
+  py: number,
+  radiusPx: (n: NeuralNode, w: number) => number,
+): HitCandidate | null {
+  let best: HitCandidate | null = null
+  let bestScore = Infinity
+  for (const n of nodes) {
+    const p = projectNode(n, yaw, pitch, view)
+    if (p.w <= 0) continue
+    const r = radiusPx(n, p.w)
+    if (r <= 0) continue
+    const dist = Math.hypot(p.x - px, p.y - py)
+    if (dist > r) continue
+    const score = dist / r
+    if (score < bestScore || (score === bestScore && best && p.w < best.w)) {
+      bestScore = score
+      best = { name: n.name, dist, r, w: p.w }
+    }
+  }
+  return best
+}

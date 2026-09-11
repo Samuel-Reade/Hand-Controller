@@ -7,6 +7,14 @@ import type { FocusRef } from './orb/geometry'
 
 export type InputMode = 'pointer' | 'hand' | 'synthetic'
 
+/**
+ * What the shell (the panel over the field) is open on: a report - the
+ * globe's and the level-1 reticle's identity - or any node of the neural
+ * field (two-click navigation, docs/DECISIONS.md). The shell is an empty
+ * container for now; its content is Rally's to add.
+ */
+export type ShellRef = FocusRef | { node: string; tier: string }
+
 /** Camera lifecycle for hand control (S11): never a modal wall, never on load. */
 export type HandStatus =
   | 'off' // camera not started; quiet affordance offers it
@@ -18,7 +26,7 @@ export type HandStatus =
 
 interface AppState {
   focus: FocusRef | null
-  openReport: FocusRef | null // Slice B renders the panel for this
+  openReport: ShellRef | null // Slice B renders the shell for this
   inputMode: InputMode
   handStatus: HandStatus
   handPresent: boolean
@@ -27,6 +35,7 @@ interface AppState {
   handZoom: boolean // the two-pinch zoom is engaged
   setFocus(focus: FocusRef): void
   openFocused(): void
+  openNode(node: string, tier: string): void
   closeReport(): void
   setInputMode(mode: InputMode): void
   setHandStatus(handStatus: HandStatus): void
@@ -50,6 +59,7 @@ export const useStore = create<AppState>((set, get) => ({
     const { focus } = get()
     if (focus) set({ openReport: focus })
   },
+  openNode: (node, tier) => set({ openReport: { node, tier } }),
   closeReport: () => set({ openReport: null }),
   setInputMode: (inputMode) => set({ inputMode }),
   setHandStatus: (handStatus) => set({ handStatus }),

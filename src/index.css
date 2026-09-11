@@ -334,141 +334,10 @@ body {
   border-color: var(--graticule);
 }
 
-.kpi-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  margin-bottom: 20px;
-}
-
-.kpi-tile {
-  border: 1px solid rgb(42 58 92 / 0.55);
-  padding: 13px 15px;
-}
-
-.kpi-label {
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: rgb(234 230 218 / 0.45);
-  margin-bottom: 7px;
-}
-
-.kpi-value {
-  font-size: 24px;
-  color: var(--ivory);
-  margin-bottom: 5px;
-  font-variant-numeric: tabular-nums;
-}
-
-.delta {
-  font-size: 10px;
-  letter-spacing: 0.1em;
-}
-
-.delta-up {
-  color: var(--ice);
-}
-
-.delta-down {
-  color: rgb(234 230 218 / 0.55);
-}
-
-.chart-block {
-  margin-bottom: 18px;
-}
-
-.chart-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 8px;
-}
-
-.chart-title {
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  font-weight: 500;
-  color: rgb(234 230 218 / 0.6);
-  margin: 0;
-}
-
-.chart-legend {
-  display: flex;
-  gap: 16px;
-  font-size: 9px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: rgb(234 230 218 / 0.55);
-}
-
-.legend-swatch {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  margin-right: 6px;
-  vertical-align: -1px;
-}
-
-.legend-swatch-line {
-  height: 2px;
-  vertical-align: 2px;
-}
-
-.chart-body-main {
-  height: 220px;
-}
-
-.chart-body-bars {
-  height: 170px;
-}
-
-.chart-tooltip {
-  background: var(--void);
-  border: 1px solid var(--graticule);
-  padding: 8px 10px;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-}
-
-.chart-tooltip-label {
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: rgb(234 230 218 / 0.5);
-  margin-bottom: 5px;
-}
-
-.chart-tooltip-row {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-top: 2px;
-}
-
-.chart-tooltip-swatch {
-  width: 8px;
-  height: 8px;
-}
-
-.chart-tooltip-name {
-  color: rgb(234 230 218 / 0.7);
-}
-
-.chart-tooltip-value {
-  margin-left: auto;
-  color: var(--ivory);
-  font-variant-numeric: tabular-nums;
-  padding-left: 14px;
-}
-
-.panel-footer {
-  border-top: 1px solid rgb(42 58 92 / 0.5);
-  padding-top: 10px;
-  font-size: 9px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgb(234 230 218 / 0.3);
+.panel-body {
+  /* The shell's content area: empty until Rally's post view lands here.
+     A floor height keeps the container legible as a container. */
+  min-height: 240px;
 }
 
 /* --- hand control: consent + HUD (Slice D) ------------------------------- */
@@ -640,6 +509,67 @@ body {
   border-width: 2px;
   background: color-mix(in srgb, var(--sight) 26%, transparent);
 }
+
+/* Selection marker (click-to-centre): a crosshair INSIDE the selected node -
+   four arms from a --gap at its centre out to half its visible radius, in
+   the hover ring's violet. Positioned from the node's projection every frame. */
+.crosshair-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  --gap: 2px;
+  --mark-arm: 9px;
+  --mark: var(--brass);
+  transition: opacity 120ms;
+}
+/* The control violet, solid; a soft violet halo lifts it off the glow. */
+.crosshair-mark-arm {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--mark);
+  opacity: 1;
+  box-shadow: 0 0 5px color-mix(in srgb, var(--mark) 80%, transparent);
+}
+/* Once the marker lands at the centre the sight's arms yield to it - one
+   cross there, not two. The sight's ring and states are untouched. */
+.crosshair[data-mark-landed='1'] .crosshair-arm {
+  opacity: 0;
+}
+
+/* Hover ring (mouse): the violet control circle just outside the node under
+   the cursor. Positioned from the node's projection every frame. */
+.crosshair-hover {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border: 1.5px solid;
+  border-radius: 50%;
+  opacity: 0;
+  box-shadow: 0 0 6px rgba(166, 107, 255, 0.45);
+  transition: opacity 90ms;
+}
+.crosshair-mark-arm.n,
+.crosshair-mark-arm.s {
+  width: 2px;
+  height: var(--mark-arm);
+  margin-left: -1px;
+}
+.crosshair-mark-arm.n { transform: translateY(calc(-1 * var(--gap) - var(--mark-arm))); }
+.crosshair-mark-arm.s { transform: translateY(var(--gap)); }
+.crosshair-mark-arm.w,
+.crosshair-mark-arm.e {
+  height: 2px;
+  width: var(--mark-arm);
+  margin-top: -1px;
+}
+.crosshair-mark-arm.w { transform: translateX(calc(-1 * var(--gap) - var(--mark-arm))); }
+.crosshair-mark-arm.e { transform: translateX(var(--gap)); }
+/* In flight the marker is a touch brighter so the pick reads at once. */
+.crosshair-mark[data-landed='0'] .crosshair-mark-arm { opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
   .crosshair-arm,

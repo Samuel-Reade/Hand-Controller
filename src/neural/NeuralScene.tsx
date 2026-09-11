@@ -41,20 +41,36 @@ import { nearestOrbitIndex, rotateYawPitch } from '../orb/geometry'
 import type { Vec3 } from '../orb/geometry'
 import { applyInputEvent, orbRuntime, stepPhysics } from '../orb/useOrbPhysics'
 import { useStore } from '../store'
-import { NCONF, generationTuple, ringRadiusPx, tupleHash } from './config'
+import { DISC_FRACTION, NCONF, generationTuple, ringRadiusPx, tupleHash } from './config'
+import {
+  centerRuntime,
+  createCenterState,
+  currentCenter,
+  currentPushWeight,
+  easeInOutCubic,
+  hoverRuntime,
+  pinPoint,
+  setCenterTarget,
+  stepCenter,
+} from './centering'
+import { cursorRuntime } from '../input/cursor'
 import { buildGraph, layoutHash, nodePosition } from './graph'
 import type { NeuralNode } from './graph'
 import { momentumFor } from './momentum'
 import { PAL } from './palette'
 import { computeRallies, diamFor, opaFor } from './rallies'
 import {
+  bindReports,
   candidatesFor,
   createHighlightState,
+  hitTestNodes,
   pointRuntime,
+  projectLocal,
   projectNode,
   stepHighlight,
   targetableNames,
 } from './pointing'
+import type { ViewSpec } from './pointing'
 import { buildPulseMesh, syncPulseUniforms } from './pulses'
 import { childShell, hubDirs, hubOrbitIndex, resolveLevel1, resolveReticle } from './selection'
 import type { ChildShellItem } from './selection'
@@ -76,7 +92,17 @@ declare global {
     /** DEV seam for gates: drive the persistent zoom base directly, the way a
      *  finished two-hand gesture would leave it. camera.z stays the rest
      *  distance, so this exercises the REAL dolly path (backdrop, glow fade). */
-    __neuralDev?: { setZoom: (factor: number) => void }
+    __neuralDev?: {
+      setZoom: (factor: number) => void
+      /** click-to-centre gates: a node's projected px offset from centre, disc radius, depth */
+      projectNode: (name: string) => { x: number; y: number; dist: number; w: number; r: number; visR: number; tier: string } | null
+      /** a node of `tier` (default hub) on screen and at least minDist px from centre; `smallest` picks the least hit radius */
+      pickClickable: (o: { minDist: number; maxX: number; maxY: number; tier?: string; smallest?: boolean }) => string | null
+      /** a px offset from centre with no node disc within 40px */
+      emptyPoint: (o: { W: number; H: number }) => { x: number; y: number } | null
+      /** what a click at this px offset from centre would hit (the click's own resolver) */
+      hitAt: (x: number, y: number) => { kind: string; name: string; x: number; y: number; w: number; r: number } | null
+    }
     __neuralInfo?: {
       drawCalls: number
       fps: number
@@ -96,6 +122,11 @@ declare global {
       pointedDist: number
       pointedTier: string
       targetable: number
+      /** click-to-centre: the node holding the centre (null = origin), blend 0..1, camera push wu */
+      centered: string | null
+      centerK: number
+      push: number
+      hovered: string | null
       yaw: number
       pitch: number
     }
@@ -202,8 +233,73 @@ const TAN_HALF_FOV = Math.tan((52 / 2) * (Math.PI / 180))
 const UP = new Vector3(0, 1, 0)
 const FALLBACK = new Vector3(1, 0, 0)
 
-function easeInOutCubic(t: number): number {
-  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2
+/** A star's projected solid-disc radius in px at depth w. */
+function discRadiusPx(diam: number, focal: number, w: number): number {
+  return ((diam * NCONF.render.spriteScale * DISC_FRACTION) / 2) * (focal / w)
+}
+
+/**
+ * The mouse hit radius (click-to-centre): the disc scaled to its glow,
+ * floored so a minor post (disc < 2 px at rest) is as clickable as it looks.
+ */
+function hitRadiusPx(diam: number, focal: number, w: number): number {
+  return Math.max(
+    NCONF.select.clickMinRadiusPx,
+    discRadiusPx(diam, focal, w) * NCONF.select.clickRadiusMult,
+  )
+}
+
+/** What the cursor is over: a graph node, or a level-1 shell report. */
+type CursorHit =
+  | { kind: 'node'; node: NeuralNode; x: number; y: number; w: number; diam: number }
+  | { kind: 'shell'; item: ChildShellItem; x: number; y: number; w: number; diam: number }
+
+/**
+ * The node under a screen point (px from centre), shared by the click and
+ * the hover ring so they can never disagree. Level-1 shell reports compete
+ * with the field on the same footing - the click goes to whichever it is
+ * MOST CENTRED on (dist / hit radius), a shell report winning an exact tie
+ * as the thing in front. Shell-first was greedy once the camera came in
+ * close: a report's glow-scaled hit disc swallowed clicks aimed at field
+ * posts behind it.
+ */
+function cursorHit(
+  x: number,
+  y: number,
+  nodes: readonly NeuralNode[],
+  byName: ReadonlyMap<string, NeuralNode>,
+  diamByName: ReadonlyMap<string, number>,
+  shell: { hub: Vector3; items: readonly ChildShellItem[] } | null,
+  yaw: number,
+  pitch: number,
+  view: ViewSpec,
+): CursorHit | null {
+  const focal = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
+  let shellHit: CursorHit | null = null
+  let shellScore = Infinity
+  if (shell) {
+    for (const item of shell.items) {
+      const local: Vec3 = [
+        shell.hub.x + item.local[0], shell.hub.y + item.local[1], shell.hub.z + item.local[2],
+      ]
+      const p = projectLocal(local, yaw, pitch, view)
+      if (p.w <= 0) continue
+      const diam = NCONF.render.tierDiam.node
+      const reach = hitRadiusPx(diam, focal, p.w)
+      const dist = Math.hypot(p.x - x, p.y - y)
+      if (dist <= reach && dist / reach < shellScore) {
+        shellScore = dist / reach
+        shellHit = { kind: 'shell', item, x: p.x, y: p.y, w: p.w, diam }
+      }
+    }
+  }
+  const diamOf = (n: NeuralNode) => diamByName.get(n.name) ?? NCONF.render.tierDiam[n.tier]
+  const h = hitTestNodes(nodes, yaw, pitch, view, x, y, (n, w) => hitRadiusPx(diamOf(n), focal, w))
+  if (!h) return shellHit
+  if (shellHit && shellScore <= h.dist / h.r) return shellHit
+  const node = byName.get(h.name)!
+  const p = projectNode(node, yaw, pitch, view)
+  return { kind: 'node', node, x: p.x, y: p.y, w: p.w, diam: diamOf(node) }
 }
 
 /** Trails from the drilled anchor to its re-shelled reports (§4.3 rules). */
@@ -423,6 +519,13 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     childShellRadius: slider(() => NCONF.select.childShellRadius, (v) => { NCONF.select.childShellRadius = v }, 100, 600, 5),
     anchorWinsBelow: slider(() => NCONF.select.anchorWinsBelow, (v) => { NCONF.select.anchorWinsBelow = v }, 0.5, 0.99, 0.01),
     affordanceLift: slider(() => NCONF.select.affordanceLift, (v) => { NCONF.select.affordanceLift = v }, 0, 1, 0.01),
+    // click-to-centre (docs/DECISIONS.md)
+    centerPush: slider(() => NCONF.select.centerPush, (v) => { NCONF.select.centerPush = v }, 0, 3600, 20),
+    clickRadiusMult: slider(() => NCONF.select.clickRadiusMult, (v) => { NCONF.select.clickRadiusMult = v }, 1, 5, 0.1),
+    clickMinRadiusPx: slider(() => NCONF.select.clickMinRadiusPx, (v) => { NCONF.select.clickMinRadiusPx = v }, 4, 40, 1),
+    markGapPx: slider(() => NCONF.select.markGapPx, (v) => { NCONF.select.markGapPx = v }, 0, 10, 0.5),
+    markMinPx: slider(() => NCONF.select.markMinPx, (v) => { NCONF.select.markMinPx = v }, 2, 20, 1),
+    markScale: slider(() => NCONF.select.markScale, (v) => { NCONF.select.markScale = v }, 0.1, 1, 0.05),
   })
 
   // ORB_SELECT_SPEC §5: every pointing constant on a slider - these are the
@@ -535,11 +638,16 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     const hd = hubDirs(nodes)
     // ORB_SELECT_SPEC §2: the crosshair only acquires report-bound nodes and
     // their ancestors. Computed once per graph build, never per frame.
-    const targetable = targetableNames(nodes)
+    // ORB_SELECT_SPEC §2 binding: the shell opens a bound node on its report
+    // (the identity the globe and the level-1 reticle use) and any other
+    // node on itself. Computed once per graph build.
+    const binding = bindReports(nodes)
+    const targetable = targetableNames(nodes, binding)
     const nodesByName = new Map(nodes.map((n) => [n.name, n]))
 
     return {
       nodes,
+      binding,
       targetable,
       nodesByName,
       diamByName,
@@ -575,20 +683,82 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     focusedItem: -1,
   })
 
+  // Click-to-centre (docs/DECISIONS.md): the constellation-local point the
+  // offset group pins to the camera axis. The drill composes on top of it
+  // (pinPoint), so the drill path is unchanged while the centre is at the
+  // origin. `viewRef` is the projection the last frame drew with - a click
+  // hit-tests against what the user actually saw.
+  const center = useRef(createCenterState())
+  const viewRef = useRef<ViewSpec | null>(null)
+
   // Two-hand zoom view (ORB_ZOOM_SPEC): pure model, stepped in useFrame.
   const zoomView = useRef(createZoomView()).current
   useEffect(() => {
     if (!import.meta.env.DEV) return
+    const project = (name: string) => {
+      const view = viewRef.current
+      const node = built.nodesByName.get(name)
+      if (!view || !node) return null
+      const p = projectNode(node, orbRuntime.physics.yaw, orbRuntime.physics.pitch, view)
+      const focal = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
+      const diam = built.diamByName.get(name) ?? NCONF.render.tierDiam[node.tier]
+      const r = p.w > 0 ? hitRadiusPx(diam, focal, p.w) : 0
+      const visR = p.w > 0 ? discRadiusPx(diam, focal, p.w) * NCONF.render.discEdge : 0
+      return { x: p.x, y: p.y, dist: p.dist, w: p.w, r, visR, tier: node.tier }
+    }
     window.__neuralDev = {
       setZoom: (factor) => {
         zoomView.base = Math.max(FEEL.zoomMin, Math.min(FEEL.zoomMax, factor))
         zoomView.hand = 1
       },
+      projectNode: project,
+      pickClickable: ({ minDist, maxX, maxY, tier = 'hub', smallest = false }) => {
+        let best: string | null = null
+        let bestR = smallest ? Infinity : 0
+        for (const n of built.nodes) {
+          if (n.tier !== tier) continue
+          const p = project(n.name)
+          if (!p || p.w <= 0 || p.dist < minDist) continue
+          if (Math.abs(p.x) + p.r > maxX || Math.abs(p.y) + p.r > maxY) continue
+          if (smallest ? p.r < bestR : p.r > bestR) {
+            bestR = p.r
+            best = n.name
+          }
+        }
+        return best
+      },
+      hitAt: (x, y) => {
+        const view = viewRef.current
+        if (!view) return null
+        const d = drill.current
+        const shell = d.level === 1 && d.target === 1 && d.hubLocal ? { hub: d.hubLocal, items: d.shell } : null
+        const h = cursorHit(x, y, built.nodes, built.nodesByName, built.diamByName, shell, orbRuntime.physics.yaw, orbRuntime.physics.pitch, view)
+        if (!h) return null
+        const focal = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
+        return {
+          kind: h.kind,
+          name: h.kind === 'node' ? h.node.name : `report:${h.item.orbitIndex}/${h.item.itemIndex}`,
+          x: h.x, y: h.y, w: h.w, r: hitRadiusPx(h.diam, focal, h.w),
+        }
+      },
+      emptyPoint: ({ W, H }) => {
+        const pts: { x: number; y: number; r: number }[] = []
+        for (const n of built.nodes) {
+          const p = project(n.name)
+          if (p && p.w > 0) pts.push({ x: p.x, y: p.y, r: p.r })
+        }
+        for (let y = -H / 2 + 60; y < H / 2 - 60; y += 37) {
+          for (let x = -W / 2 + 60; x < W / 2 - 60; x += 41) {
+            if (pts.every((p) => Math.hypot(p.x - x, p.y - y) > p.r + 40)) return { x, y }
+          }
+        }
+        return null
+      },
     }
     return () => {
       delete window.__neuralDev
     }
-  }, [zoomView])
+  }, [zoomView, built])
 
   // Crosshair highlight (ORB_SELECT_SPEC PT1). Read-only: the state is
   // published for the overlay and telemetry and drives NOTHING else - the
@@ -677,13 +847,90 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     const reticleHub = () =>
       resolveReticle(built.hubDirList, orbRuntime.physics.yaw, orbRuntime.physics.pitch)
 
+    // Mouse click (a POSITIONED tap, docs/DECISIONS.md click-to-centre,
+    // two-click navigation). The cursor, not the sight, says which node was
+    // meant: hit-test the node under it against the last drawn projection,
+    // then
+    //   - a node -> it flies to the centre and becomes the pivot (SELECT);
+    //   - the selected node again -> ENTER: the shell opens on it (on its
+    //     report when it carries one, else on the node itself);
+    //   - at level 1 (reached by Enter / pinch, the sight model): a shell
+    //     report opens; the anchor drills out; any other node drills out
+    //     and centres;
+    //   - empty space -> nothing. A blind confirm at the sight is what a
+    //     cursor user reads as "I clicked X and got Y".
+    // Hand pinch-taps and Enter stay unpositioned and keep the sight model.
+    const click = (x: number, y: number): void => {
+      const view = viewRef.current
+      if (!view) return
+      const { yaw, pitch } = orbRuntime.physics
+      const shell = d.level === 1 && d.target === 1 && d.hubLocal ? { hub: d.hubLocal, items: d.shell } : null
+      const hit = cursorHit(x, y, built.nodes, built.nodesByName, built.diamByName, shell, yaw, pitch, view)
+      if (!hit) return
+      if (hit.kind === 'shell') {
+        const ref = { orbitIndex: hit.item.orbitIndex, itemIndex: hit.item.itemIndex }
+        const store = useStore.getState()
+        store.setFocus(ref)
+        orbRuntime.focus = ref
+        store.openFocused()
+        return
+      }
+      const node = hit.node
+      const local = nodePosition(node)
+      const already = center.current.name === node.name && center.current.k >= 1
+
+      if (d.level === 1) {
+        if (d.hubNode === node) {
+          // The anchor is the drill-out target (§4); it keeps the centre.
+          center.current = setCenterTarget(center.current, node.name, local)
+          d.target = 0
+          return
+        }
+        // Any other node: leave the drill and centre on it. The pin blends
+        // from the hub to the new centre over the same duration.
+        d.target = 0
+        center.current = setCenterTarget(center.current, node.tier === 'brain' ? null : node.name, local)
+        return
+      }
+      if (already && d.target === 0) {
+        // Second click: enter. The shell is the 2D view; the field's job
+        // ends at selection (RALLY.md §5).
+        const bound = built.binding.get(node.name)
+        const store = useStore.getState()
+        if (bound) {
+          store.setFocus(bound)
+          orbRuntime.focus = bound
+          store.openFocused()
+        } else {
+          store.openNode(node.name, node.tier)
+        }
+        return
+      }
+      center.current = setCenterTarget(center.current, node.tier === 'brain' ? null : node.name, local)
+    }
+
+    // Escape: back to the centre node. Any drill flies out and the centre
+    // returns to the brain; the pin blends hub -> origin over one duration.
+    const home = (): void => {
+      if (d.level === 1) d.target = 0
+      center.current = setCenterTarget(center.current, null, [0, 0, 0])
+    }
+
     return bus.on((e) => {
       if (e.type === 'zoom') {
         applyZoomEvent(zoomView, e)
         return
       }
+      if (e.type === 'home') {
+        if (!useStore.getState().openReport) home()
+        return
+      }
       if (e.type !== 'tap' && e.type !== 'zoomCommit') return
       if (useStore.getState().openReport) return // input suspended while open
+      if (e.type === 'tap' && e.x !== undefined && e.y !== undefined) {
+        click(e.x, e.y)
+        return
+      }
       if (e.type === 'zoomCommit') {
         if (e.dir === 'in') {
           if (d.level === 0) {
@@ -775,18 +1022,29 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       d.orbitIndex = null
       d.shell = []
     }
-    const push = d.hubLocal ? k * NCONF.select.recenterPush : 0
+    // The camera push: the greater of the centred node's (orbit radius,
+    // select.centerPush) and the drill's own as it blends in - not their
+    // sum, which at 3000 + 900 landed the camera 700 wu from a blown-out
+    // hub. A drill from a selected post keeps its distance; a drill from
+    // home (Enter / pinch) pushes by recenterPush as it always did. Zero
+    // with the centre at the origin and no drill - the rest view is untouched.
+    center.current = stepCenter(center.current, delta, dur)
+    const push = Math.max(
+      currentPushWeight(center.current) * NCONF.select.centerPush,
+      d.hubLocal ? k * NCONF.select.recenterPush : 0,
+    )
+    // The pin: the clicked centre, overridden by the drilled hub as the
+    // drill blends in (pinPoint). Re-derived from the LIVE rotation every
+    // frame, so the pinned node stays on the camera axis while the field
+    // rotates about it.
     if (offsetRef.current) {
-      if (d.hubLocal) {
-        const hw = rotateYawPitch(
-          [d.hubLocal.x, d.hubLocal.y, d.hubLocal.z],
-          physics.yaw,
-          physics.pitch,
-        )
-        offsetRef.current.position.set(-k * hw[0], -k * hw[1], -k * hw[2] + push)
-      } else {
-        offsetRef.current.position.set(0, 0, 0)
-      }
+      const pin = pinPoint(
+        currentCenter(center.current),
+        d.hubLocal ? [d.hubLocal.x, d.hubLocal.y, d.hubLocal.z] : null,
+        k,
+      )
+      const pw = rotateYawPitch(pin, physics.yaw, physics.pitch)
+      offsetRef.current.position.set(-pw[0], -pw[1], -pw[2] + push)
     }
 
     // Two-hand zoom (ORB_ZOOM_SPEC section 3): the continuous factor dollies
@@ -867,6 +1125,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         viewportH: state.size.height,
         offset: off ? ([off.position.x, off.position.y, off.position.z] as Vec3) : undefined,
       }
+      viewRef.current = view
       const cands = candidatesFor(
         built.nodes,
         built.targetable,
@@ -899,6 +1158,50 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       } else {
         pointRuntime.tier = ''
         pointRuntime.ringR = 0
+      }
+
+      // Selection marker (click-to-centre): the centred node's projection,
+      // tracked through its flight so the click reads the instant it lands.
+      const c = center.current
+      const sel = c.name ? built.nodesByName.get(c.name) : undefined
+      if (sel) {
+        const p = projectNode(sel, physics.yaw, physics.pitch, view)
+        const focal = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
+        const diam = built.diamByName.get(sel.name) ?? NCONF.render.tierDiam[sel.tier]
+        centerRuntime.name = sel.name
+        centerRuntime.x = p.x
+        centerRuntime.y = p.y
+        centerRuntime.r = p.w > 0 ? discRadiusPx(diam, focal, p.w) * NCONF.render.discEdge : 0
+        centerRuntime.hue = PAL[sel.hue].body
+        centerRuntime.k = c.k
+      } else {
+        centerRuntime.name = null
+        centerRuntime.k = c.k
+      }
+
+      // Hover ring (mouse only): the node the cursor is over, by the SAME
+      // hit-test a click uses. Hidden while a button is down (a drag is not
+      // a hover), while a report is open, and in hand mode.
+      const cur = cursorRuntime
+      let hover: CursorHit | null = null
+      if (store.inputMode === 'pointer' && cur.inside && !cur.down && !store.openReport) {
+        const shell = d.level === 1 && d.target === 1 && d.hubLocal ? { hub: d.hubLocal, items: d.shell } : null
+        hover = cursorHit(
+          cur.x, cur.y, built.nodes, built.nodesByName, built.diamByName, shell,
+          physics.yaw, physics.pitch, view,
+        )
+      }
+      if (hover) {
+        const focal = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
+        hoverRuntime.name =
+          hover.kind === 'node'
+            ? hover.node.name
+            : `report:${ORBITS[hover.item.orbitIndex].reports[hover.item.itemIndex].id}`
+        hoverRuntime.x = hover.x
+        hoverRuntime.y = hover.y
+        hoverRuntime.r = discRadiusPx(hover.diam, focal, hover.w) * NCONF.render.discEdge
+      } else {
+        hoverRuntime.name = null
       }
     }
 
@@ -1021,6 +1324,10 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       candidate,
       pointed: pointRuntime.name,
       pointedDist: Math.round(pointRuntime.dist),
+      centered: center.current.name,
+      centerK: center.current.k,
+      push,
+      hovered: hoverRuntime.name,
       pointedTier: pointRuntime.tier,
       targetable: pointRuntime.targetableCount,
       yaw: physics.yaw,

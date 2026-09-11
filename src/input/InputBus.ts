@@ -9,7 +9,14 @@ export type InputEvent =
   | { type: 'engage' }
   | { type: 'move'; dYaw: number; dPitch: number }    // radians, already gained
   | { type: 'release'; vYaw: number; vPitch: number } // rad/s, hands off to the coast
-  | { type: 'tap' }                                   // open the focused report
+  // A tap confirms. Hand pinch-taps and Enter are UNPOSITIONED: they act on
+  // whatever holds the sight. A mouse/touch tap carries its release point in
+  // px from the viewport centre (+x right, +y down) so the active scene can
+  // hit-test the node under the cursor (click-to-centre, DECISIONS.md).
+  | { type: 'tap'; x?: number; y?: number }
+  // Return to the anchor (Escape): undo any drill and any click-to-centre so
+  // the brain holds the centre again. The physics ignores it.
+  | { type: 'home' }
   | { type: 'step'; axis: 'yaw' | 'pitch'; dir: -1 | 1 }
   | { type: 'lost' }                                  // tracking dropped: freeze, decay
   // Two-handed pinch-zoom (ORB_ZOOM_SPEC). Emitted by the hand arbiter that

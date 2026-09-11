@@ -531,3 +531,204 @@ go into the core." (from a ~5x shot)
   endInset 0; one visible disc radius out at endInset 1).
 - Gate: white-clip 0.24% (spokes now reach the anchor's centre), 7x median
   14.0/255, 9 draws, 60 fps, pointing 9/9.
+
+## Click-to-centre: the mouse clicks the node (2026-09-10, user direction)
+Brief: "clicking a node should reposition the viewport so that node becomes
+the center of view." Preceded by the question "should we just have the mouse
+click the nodes?" - answered yes: RALLY.md puts daily work on conventional
+input, and ORB_SELECT_SPEC's fixed sight exists for the hand's precision,
+not the mouse's. A mouse click was a blind confirm at the sight ("I clicked
+X and got Y").
+- A `tap` may now carry a position (px from the viewport centre). Mouse and
+  touch taps do; hand pinch-taps, Enter and the synthetic harness do not, so
+  every existing tap path is byte-identical for them. This is a scoped
+  departure from ORB_SELECT_SPEC §1 ("the sight never tracks the hand") and
+  the base spec's "no raycasting at items": the SIGHT still never moves;
+  the cursor is a second, precise pointing device with its own hit-test.
+  Neural scene only; the globe's tap = open focused report is unchanged.
+- Hit-test (`hitTestNodes`): the node whose projected disc (plus
+  `select.clickSlackPx`) contains the click, most-centred wins on overlap.
+  ANY node is clickable - centring is navigation, not a confirm, so the §2
+  targetable filter does not apply. Consequence, visible: centring a
+  non-targetable post leaves the sight ring on the nearest targetable
+  neighbour, because the §2 filter still governs the highlight.
+- "Centre" = the drill's existing recenter, generalised: the offset group
+  pins a constellation-local point to the camera axis (`centering.ts`), the
+  clicked node at level 0, the drilled hub as the drill blends in
+  (`pinPoint`). Rotation is untouched and the pinned node becomes the pivot,
+  the same way the drilled hub already did. Blend = `select.recenterDuration`
+  with the drill's easing; a click mid-flight retargets from where the
+  centre is. Rejected: driving yaw/pitch to a target - it would mean
+  teaching the frozen integrator a seek and fighting momentum, for the same
+  visible result.
+- Routing of a positioned tap, level 0: node -> centre on it; the centred
+  post again -> drill in (the confirm the sight would give it, so the mouse
+  can still reach level 1); the brain -> centre returns to the origin; empty
+  space -> nothing. Level 1: a shell report -> opens it (focus set to the
+  CLICKED report, then the S9 open); the drilled hub -> drill out, staying
+  centred; any other node -> drill out and centre on it.
+- Known seam, left as is: the level-0 hub reticle affordance (`resolveReticle`,
+  direction-based, ignores the offset) still lights a hub for the hand model
+  after a mouse centring, and it is no longer at the sight. It is the hand's
+  instrument; retiring it is PT3's.
+- Gates: tests/centering.test.ts (hit-test, blend, "every node projects to
+  centre after the blend at any rotation, and is the pivot");
+  scripts/verify-centering.mjs in the browser: click centres (249 px -> 0),
+  empty miss, second click drills, level-1 click recentres, Enter keeps the
+  sight model, globe tap opens. 60 fps, no page errors.
+
+### Follow-up (2026-09-10, user direction): all nodes clickable; Escape = home
+"All nodes should be able to be clicked. esc button brings back to the
+center node."
+- Small posts missed because the hit target was the SOLID DISC: 13 wu
+  diamMin x spriteScale x DISC_FRACTION / 2 = 8 wu, under 2 px at rest zoom,
+  while the glow the user aims at reads 10-20 px. The hit radius is now the
+  disc x `select.clickRadiusMult` (2.5, the visible glow) floored at
+  `select.clickMinRadiusPx` (14). `hitTestNodes` takes the effective radius;
+  the slack constant is gone. Test: every node in the field is hittable at
+  its own centre.
+- Escape emits a `home` bus event when no report is open (with one open it
+  still closes the panel first). The scene answers by flying any drill out
+  and returning the centre to the origin on the same blend, so the pin runs
+  hub -> origin monotonically. ORB_SELECT_SPEC §4 asked for Escape as
+  drill-out; this is that, plus the click-to-centre undo. The physics and
+  the globe ignore the event.
+- Gates added: smallest on-screen post clicks and centres (hit r 14 px);
+  Escape from a centred post and from a drill both put the brain back at
+  screen centre at level 0.
+
+### Follow-up (2026-09-10, user direction): orbit radius, pivot, selection marker
+"Scale the radius of rotation down to be a good user experience. The new
+node clicked should be the center of rotation. There should also be a
+crosshair on the node selected."
+- Pivot, verified before changing anything: in a live 200 px drag the
+  centred node held 0.00 px from screen centre throughout while the brain
+  swung 114 px round it (scratch playwright run; now gate `pivot-is-node`).
+  The offset is re-derived from the live rotation every frame, so the
+  clicked node IS the centre of rotation. Nothing to fix there.
+- "Radius of rotation" read as the ORBIT radius - the camera's distance to
+  the pivot. From the rest distance (4600 wu) a peripheral post's rotation
+  shows the whole field, brain included, sweeping a wide arc round it: a
+  large-radius orbit. Centring a node now also brings the camera in by
+  `select.centerPush` (2000 wu, slider; the drill's own push pattern), so
+  the node's neighbourhood is the subject and dragging reads as orbiting
+  it. The push weight (0 at home, 1 on a node) blends on the same clock as
+  the position; node -> node keeps the camera in; Escape pulls it back out.
+  The drill's `recenterPush` stacks on top (a drill from a centred hub goes
+  closer still; from the origin it is byte-identical to before). Rejected:
+  scaling the drag gain down with pivot distance - the field would still
+  sweep the same arc, only slower.
+- Selection marker: a second crosshair drawn ON the selected node - four
+  arms standing `select.markGapPx` outside its disc, `select.markArmPx`
+  long, its hue lifted toward white (the raw hue vanished against the
+  node's own glow). It follows the node through its flight, so the pick
+  reads the instant it lands, and sits concentric outside the sight once
+  centred. The sight itself is unchanged and still never moves (§1).
+  Gate: marker present, landed, at translate(0,0) after the blend; hidden
+  after Escape.
+
+### Follow-up (2026-09-10, user direction): the marker lives inside the node
+"make the crosshair only exist within the bounds of the node."
+- The selection marker is now inscribed: four arms from `select.markGapPx`
+  (2) at the node's centre out to its VISIBLE edge - disc radius x
+  render.discEdge, where the luminous body ends - and never past it.
+  `select.markMinPx` (5) floors the half-size so a minor post (edge ~2 px)
+  still shows one; that floor is the one case the marker may exceed the
+  body. `markArmPx` is gone - arm length is the node's, not a constant.
+- Two crosses at one point read as clutter, so once the marker LANDS at
+  the centre (blend done) the sight's four arms yield to it
+  (`data-mark-landed` on the overlay root, CSS opacity 0). The sight's
+  ring, states and highlight model are untouched, and it never moves; in
+  flight both are visible because they are in different places. Escape
+  hides the marker and the sight's arms return.
+- Gate: marker extent (gap + arm) <= max(markMinPx, node visible radius),
+  measured 31.4 px = 31.4 px on the clicked post; sight arms at opacity 0
+  under the landed marker.
+
+### Follow-up (2026-09-10, user direction): no red circle; violet hover ring
+"sometimes there is a red circle around a selected node. Also make a hover
+with the cursor that is the purple circle."
+- The red circle was the SIGHT's ring (PT1): it borrows the highlighted
+  node's hue - red on a red post - and on every `engage` it enters the
+  "confirming" state (2 px border + fill), which a mouse-down also fires.
+  With a centred red post under the sight, every click flashed a filled
+  red ring round it. Since a positioned tap never confirms at the sight,
+  that ring is the hand model's instrument only: in pointer mode
+  (`store.inputMode === 'pointer'`) it is not drawn. Hand mode keeps the
+  PT1 ring exactly as gated. The sight's arms are unchanged.
+- Hover ring: in pointer mode the node under the cursor gets a violet
+  circle (`PAL.violet.body`, RALLY §7 - violet is the control colour, never
+  data) just outside its visible edge, and the stage cursor becomes
+  `pointer`. It uses the SAME hit-test as the click (`cursorHit`: level-1
+  shell reports first, then the field by the glow-floored hit radius), so
+  what lights up is exactly what a click would take. Hidden while a button
+  is down (a drag is not a hover), while a report is open, off the stage,
+  and in hand mode. The cursor position is a per-frame runtime
+  (`input/cursor.ts`) written by the pointer adapter, never React state.
+- Gate: hovering a post lights the violet ring on that post (diameter >=
+  its visible diameter) with the pointer cursor; leaving clears both; the
+  sight ring stays hidden in pointer mode and does not fill on mouse-down.
+
+### Follow-up (2026-09-10, user direction): closer POV on a selected node
+"make the POV distance smaller when tapping into a node. Keep the main node
+distance the same."
+- `select.centerPush` 2000 -> 3000: a selected post is now viewed from
+  1600 wu (2.9x) instead of 2600. Home is untouched - its push weight is 0,
+  so the brain stays at the 4600 wu rest distance.
+- The drill no longer STACKS its own push on the centre push (that put the
+  camera 700 wu from a blown-out hub); the push is now the greater of the
+  two. A drill from a selected post keeps the 1600 wu distance; a drill from
+  home via Enter/pinch pushes by recenterPush as before. Supersedes the
+  "stacks on top" line in the orbit-radius entry above.
+- Found at the closer distance and fixed: level-1 shell reports were tested
+  FIRST in the click/hover resolver, so a report's glow-scaled hit disc
+  swallowed clicks aimed at field posts behind it. Shell and field now
+  compete on the same footing - the click goes to whichever it is most
+  centred on, a report winning an exact tie as the thing in front.
+- Gate: picks stay clear of the chrome overlays (a node under the ORBITS
+  list cannot be clicked - that is the overlay, not the field); a hit-test
+  dev seam (`__neuralDev.hitAt`) reports what a click would resolve to.
+
+## Empty shell + two-click navigation (2026-09-10, user direction)
+"Remove the analytics visualization from the shell interface. Keep the
+shell container structure intact so other content can be added later.
+Implement two-click navigation: first click focuses/selects the node,
+second click enters the shell."
+- The shell is the S2 panel (`ReportPanel`, `.report-panel`). Its
+  placeholder analytics - the KPI row, the two Recharts charts on
+  deterministic data, the footer - are removed. What remains is the
+  container: backdrop, dialog with focus trap and Tab loop, header
+  (eyebrow + title + ESC · CLOSE), and an empty `.panel-body` with a floor
+  height. Rally's post view (RALLY.md: the shout, its echoes, momentum,
+  status) lands in `.panel-body`; nothing else needs rewiring. The
+  analytics CSS went with the content. `recharts` is now unused
+  (dependency left in package.json - removing it is a separate call) and
+  so is `data/placeholder.ts`'s reportData.
+- The shell can open on ANY node: the store's open state is a `ShellRef` -
+  a report (the globe's and the level-1 reticle's identity, unchanged) or
+  `{ node, tier }`. Every "suspend input while open" check is a truthiness
+  test and is untouched. Header identity: a report keeps orbit + title; a
+  node shows its Rally tier (Camp / Shout / Echo) and name until real shout
+  data exists.
+- Two-click navigation (mouse): click one SELECTS - centre, marker, camera
+  in, as built; click two on the selected node ENTERS - the shell opens on
+  it: on its report when it carries one (`bindReports`, the §2 binding, so
+  bound nodes keep the identity they always opened with), else on the node
+  itself. The second click no longer drills into the child shell; the drill
+  stays reachable through the sight model (Enter / pinch-tap), and the
+  level-1 click routing (shell report opens, anchor drills out, other node
+  drills out and centres) is unchanged. Escape closes the shell and keeps
+  the selection; a further Escape goes home, as before.
+- Gate: second click opens the shell on the selected node at level 0, as
+  an empty container (body present with zero children, no chart markup);
+  Escape closes it with the selection kept; the drill gates now enter
+  through Enter.
+
+### Follow-up (2026-09-10, user direction): marker at half size, in violet
+"scale the crosshair down by 50% and make it the same purple as the ring."
+- The selection marker's half-size is now `select.markScale` (0.5) x the
+  node's visible radius, still floored by markMinPx, still inscribed. Its
+  colour is the hover ring's violet (`PAL.violet.body`, the Rally control
+  colour) instead of the node's hue lifted toward white - so both control
+  marks read as one system. Gate: extent = half the node's visible radius
+  (25.5 of 51 px), colour rgb(166, 107, 255).

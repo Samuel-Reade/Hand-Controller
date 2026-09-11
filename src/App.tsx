@@ -58,13 +58,27 @@ export default function App() {
     return () => mq.removeEventListener('change', apply)
   }, [])
 
+  // Neural port (ORB_NEURAL_PORT_SPEC §0): the star network IS the rendered
+  // object as of Slice P5. The globe build stays reachable at ?scene=globe
+  // for side-by-side gates; ?chrome=0 hides overlays for screenshot gates.
+  const neural = useMemo(
+    () => new URLSearchParams(window.location.search).get('scene') !== 'globe',
+    [],
+  )
+
   // Tap opens the focused report (S9: tap vs drag is the entire click model).
+  // In the neural scene a POSITIONED tap (a mouse click) is routed by the
+  // scene itself - it hit-tests the node under the cursor (click-to-centre,
+  // docs/DECISIONS.md) and opens a report only when a report was clicked.
+  // The globe keeps every tap = open focused, unchanged.
   useEffect(
     () =>
       bus.on((e) => {
-        if (e.type === 'tap') useStore.getState().openFocused()
+        if (e.type !== 'tap') return
+        if (neural && e.x !== undefined) return
+        useStore.getState().openFocused()
       }),
-    [bus],
+    [bus, neural],
   )
 
   // Dev mode (S9b): ?input=synthetic&scenario=<name> drives the live app
@@ -101,13 +115,6 @@ export default function App() {
     [],
   )
 
-  // Neural port (ORB_NEURAL_PORT_SPEC §0): the star network IS the rendered
-  // object as of Slice P5. The globe build stays reachable at ?scene=globe
-  // for side-by-side gates; ?chrome=0 hides overlays for screenshot gates.
-  const neural = useMemo(
-    () => new URLSearchParams(window.location.search).get('scene') !== 'globe',
-    [],
-  )
   const hideChrome = useMemo(
     () => import.meta.env.DEV && new URLSearchParams(window.location.search).get('chrome') === '0',
     [],

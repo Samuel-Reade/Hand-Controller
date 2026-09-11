@@ -1,11 +1,14 @@
 // Pointer -> InputBus (S7): down = engage, move = move + running velocity,
 // up = release, or tap if total travel stayed under the tap radius.
-// The physics never learns a mouse exists.
+// The physics never learns a mouse exists. A tap carries where it landed
+// (px from the stage centre) so a scene can hit-test the node under the
+// cursor; the physics ignores the position.
 
 import { useEffect } from 'react'
 import type { RefObject } from 'react'
 import { FEEL } from '../config/feel'
 import type { InputBus } from './InputBus'
+import { cursorRuntime } from './cursor'
 import { useStore } from '../store'
 
 interface Sample {
@@ -29,8 +32,20 @@ export function usePointerInput(targetRef: RefObject<HTMLElement | null>, bus: I
     let maxTravel = 0
     let samples: Sample[] = []
 
+    const track = (e: PointerEvent) => {
+      const rect = el.getBoundingClientRect()
+      cursorRuntime.x = e.clientX - (rect.left + rect.width / 2)
+      cursorRuntime.y = e.clientY - (rect.top + rect.height / 2)
+      cursorRuntime.inside = true
+    }
+    const onLeave = () => {
+      cursorRuntime.inside = false
+    }
+
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return
+      track(e)
+      cursorRuntime.down = true
       if (useStore.getState().openReport) return // orb input suspended (S2)
       dragging = true
       el.setPointerCapture(e.pointerId)
@@ -43,6 +58,7 @@ export function usePointerInput(targetRef: RefObject<HTMLElement | null>, bus: I
     }
 
     const onMove = (e: PointerEvent) => {
+      track(e)
       if (!dragging) return
       const dx = e.clientX - lastX
       const dy = e.clientY - lastY
@@ -56,6 +72,7 @@ export function usePointerInput(targetRef: RefObject<HTMLElement | null>, bus: I
     }
 
     const endDrag = (e: PointerEvent, kind: 'release' | 'lost') => {
+      cursorRuntime.down = false
       if (!dragging) return
       dragging = false
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId)
@@ -64,7 +81,14 @@ export function usePointerInput(targetRef: RefObject<HTMLElement | null>, bus: I
         return
       }
       if (maxTravel < FEEL.tapMaxTravelPx) {
-        bus.emit({ type: 'tap' })
+        // The DOWN point is the intended target; travel under the tap
+        // radius is jitter, not aim.
+        const rect = el.getBoundingClientRect()
+        bus.emit({
+          type: 'tap',
+          x: startX - (rect.left + rect.width / 2),
+          y: startY - (rect.top + rect.height / 2),
+        })
         return
       }
       // Trailing velocity over the recent window, in rad/s.
@@ -86,11 +110,15 @@ export function usePointerInput(targetRef: RefObject<HTMLElement | null>, bus: I
     el.addEventListener('pointermove', onMove)
     el.addEventListener('pointerup', onUp)
     el.addEventListener('pointercancel', onCancel)
+    el.addEventListener('pointerleave', onLeave)
     return () => {
       el.removeEventListener('pointerdown', onDown)
       el.removeEventListener('pointermove', onMove)
       el.removeEventListener('pointerup', onUp)
       el.removeEventListener('pointercancel', onCancel)
+      el.removeEventListener('pointerleave', onLeave)
+      cursorRuntime.inside = false
+      cursorRuntime.down = false
     }
   }, [targetRef, bus])
 }

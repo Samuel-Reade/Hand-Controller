@@ -1,6 +1,7 @@
 // Keyboard -> InputBus. Full keyboard operation is a requirement (S7): it is
 // how the app works with the camera off. Arrows step between items/orbits,
-// Enter taps, Escape closes the report panel.
+// Enter taps, Escape closes the report panel - or, with none open, returns
+// the view to the centre node (home).
 
 import { useEffect } from 'react'
 import type { InputBus } from './InputBus'
@@ -19,10 +20,9 @@ export function useKeyboardInput(bus: InputBus): void {
       if (e.defaultPrevented || isEditable(e.target)) return
       const { openReport, closeReport } = useStore.getState()
       if (e.key === 'Escape') {
-        if (openReport) {
-          e.preventDefault()
-          closeReport()
-        }
+        e.preventDefault()
+        if (openReport) closeReport()
+        else bus.emit({ type: 'home' })
         return
       }
       if (openReport) return // orb input suspended while a report is open
