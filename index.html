@@ -5,6 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
+    <!--
+      Nothing leaves this machine (S9, ORB_EYE_SPEC §7) - enforced, not
+      promised: the page may only connect to its own origin. This blocks
+      @mediapipe/tasks-vision's built-in usage telemetry (an unconditional
+      POST to odml.pa.googleapis.com every 60 s, for the hand model as much
+      as the face model). localhost/127.0.0.1 ws/http are Vite's dev HMR.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="connect-src 'self' http://localhost:* ws://localhost:* http://127.0.0.1:* ws://127.0.0.1:*"
+    />
     <title>Orb Shell</title>
   </head>
   <body>
