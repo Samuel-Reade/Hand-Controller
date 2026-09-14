@@ -1,6 +1,8 @@
 import { Canvas } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import { createInputBus } from './input/InputBus'
+import { EYE } from './input/eye/config'
+import { useEyeInput } from './input/useEyeInput'
 import { useHandInput } from './input/useHandInput'
 import { useKeyboardInput } from './input/useKeyboardInput'
 import { usePointerInput } from './input/usePointerInput'
@@ -14,6 +16,9 @@ import { Reticle } from './orb/Reticle'
 import { FEEL, motionPrefs } from './config/feel'
 import { useStore } from './store'
 import { CameraConsent } from './ui/CameraConsent'
+import { EyeCalibration } from './ui/EyeCalibration'
+import { EyeControls } from './ui/EyeControls'
+import { EyeDebug } from './ui/EyeDebug'
 import { FeelPanel } from './ui/FeelPanel'
 import { FocusAnnouncer } from './ui/FocusAnnouncer'
 import { OrbitIndex } from './ui/OrbitIndex'
@@ -24,9 +29,15 @@ import { Telemetry } from './ui/Telemetry'
 // drills (ORB_ZOOM_SPEC zoomCommitsDrill=false, the human-gate fork) - set at
 // module load so the leva checkbox reflects it.
 if (import.meta.env.DEV && typeof window !== 'undefined') {
-  if (new URLSearchParams(window.location.search).get('zoomDrill') === '0') {
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('zoomDrill') === '0') {
     FEEL.zoomCommitsDrill = false
   }
+  // ORB_EYE_SPEC §8: the debug overlay for gate screenshots; the mode for
+  // the steer-route scenarios ('point' is the default).
+  if (params.get('eyeDebug') === '1') EYE.showDebug = true
+  const mode = params.get('eyeMode')
+  if (mode === 'steer' || mode === 'point') EYE.mode = mode
 }
 
 // The neural scene runs the SAME integrator on its own FEEL profile (no free
@@ -45,6 +56,7 @@ export default function App() {
   usePointerInput(stageRef, bus)
   useKeyboardInput(bus)
   useHandInput(bus)
+  useEyeInput(bus) // ORB_EYE_SPEC: rides the hand shell's frames; never opens a camera
 
   // prefers-reduced-motion: shorten the coast substantially, keep direct
   // manipulation - inertia IS the product (S11). CSS drops panel transitions.
@@ -89,10 +101,17 @@ export default function App() {
     if (params.get('input') !== 'synthetic') return
     let stop: (() => void) | undefined
     let cancelled = false
-    import('./dev/syntheticHand').then((m) => {
+    const scenario = params.get('scenario') ?? 'flick'
+    // ORB_EYE_SPEC §8: eye-* scenarios feed the gaze channel instead of the
+    // hand pipeline; ?eye=1 opts the channel in as the HUD button would.
+    if (params.get('eye') === '1') useStore.getState().setEyeEnabled(true)
+    import(scenario.includes('eye-') ? './dev/syntheticEye' : './dev/syntheticHand').then((m) => {
       if (cancelled) return
       useStore.getState().setInputMode('synthetic')
-      stop = m.startSyntheticDrive(bus, params.get('scenario') ?? 'flick')
+      stop =
+        'startSyntheticEyeDrive' in m
+          ? m.startSyntheticEyeDrive(bus, scenario)
+          : m.startSyntheticDrive(bus, scenario)
     })
     return () => {
       cancelled = true
@@ -162,6 +181,8 @@ export default function App() {
           {/* ORB_SELECT_SPEC §0 scope guard: the sight is neural-scene only;
               ?scene=globe keeps rotation-as-selection untouched. */}
           {neural && <Crosshair />}
+          {neural && <EyeDebug />}
+          {neural && <EyeCalibration />}
           <OrbitIndex bus={bus} />
           <CameraConsent />
           <Telemetry />
@@ -170,6 +191,7 @@ export default function App() {
       <ReportPanel />
       <FocusAnnouncer />
       <FeelPanel hidden={hideTune} />
+      {neural && <EyeControls />}
     </div>
   )
 }

@@ -37,6 +37,7 @@ export function usePointerInput(targetRef: RefObject<HTMLElement | null>, bus: I
       cursorRuntime.x = e.clientX - (rect.left + rect.width / 2)
       cursorRuntime.y = e.clientY - (rect.top + rect.height / 2)
       cursorRuntime.inside = true
+      cursorRuntime.lastEventAt = performance.now()
     }
     const onLeave = () => {
       cursorRuntime.inside = false

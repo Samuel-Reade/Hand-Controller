@@ -54,6 +54,11 @@ import {
   stepCenter,
 } from './centering'
 import { cursorRuntime } from '../input/cursor'
+import { eyeRuntime } from '../input/eye/channel'
+import { EYE } from '../input/eye/config'
+import { eyeLearn } from '../input/useEyeInput'
+import { createGazeFocus, gazeRuntime, stepGazeFocus } from './gazeFocus'
+import type { GazeCandidate } from './gazeFocus'
 import { buildGraph, layoutHash, nodePosition } from './graph'
 import type { NeuralNode } from './graph'
 import { momentumFor } from './momentum'
@@ -127,6 +132,9 @@ declare global {
       centerK: number
       push: number
       hovered: string | null
+      /** ORB_EYE point mode: the node under the eyes (null = none / pointer not live) */
+      gazed: string | null
+      gazeLive: boolean
       yaw: number
       pitch: number
     }
@@ -690,6 +698,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
   // hit-tests against what the user actually saw.
   const center = useRef(createCenterState())
   const viewRef = useRef<ViewSpec | null>(null)
+  /** ORB_EYE point mode: the node the eyes are on (neural/gazeFocus.ts) */
+  const gazeFocus = useRef(createGazeFocus())
 
   // Two-hand zoom view (ORB_ZOOM_SPEC): pure model, stepped in useFrame.
   const zoomView = useRef(createZoomView()).current
@@ -769,7 +779,9 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
   // here: PT1 never selects, so no bus event is consumed or suppressed.
   useEffect(() => {
     const off = bus.on((e) => {
-      if (e.type === 'engage') pointRuntime.confirming = true
+      // A gaze-sourced engage is the eye channel opening its steering
+      // engagement (ORB_EYE_SPEC), not a pinch: never "confirming".
+      if (e.type === 'engage' && e.source !== 'gaze') pointRuntime.confirming = true
       else if (e.type === 'release' || e.type === 'tap' || e.type === 'lost') {
         pointRuntime.confirming = false
       }
@@ -929,6 +941,15 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       if (useStore.getState().openReport) return // input suspended while open
       if (e.type === 'tap' && e.x !== undefined && e.y !== undefined) {
         click(e.x, e.y)
+        return
+      }
+      // ORB_EYE point mode: an UNPOSITIONED confirm (Enter, pinch-tap) with a
+      // node under the eyes acts on that node exactly as a click would -
+      // select, then enter. The sight model below is the fallback.
+      if (e.type === 'tap' && gazeRuntime.live && gazeRuntime.name) {
+        // A verified sample: the ring was on the node they wanted.
+        eyeLearn(gazeRuntime.nodeX + window.innerWidth / 2, gazeRuntime.nodeY + window.innerHeight / 2)
+        click(gazeRuntime.nodeX, gazeRuntime.nodeY)
         return
       }
       if (e.type === 'zoomCommit') {
@@ -1191,17 +1212,81 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
           physics.yaw, physics.pitch, view,
         )
       }
+      const focalH = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
       if (hover) {
-        const focal = view.viewportH / 2 / Math.tan((view.fovDeg * Math.PI) / 360)
+        hoverRuntime.source = 'mouse'
         hoverRuntime.name =
           hover.kind === 'node'
             ? hover.node.name
             : `report:${ORBITS[hover.item.orbitIndex].reports[hover.item.itemIndex].id}`
         hoverRuntime.x = hover.x
         hoverRuntime.y = hover.y
-        hoverRuntime.r = discRadiusPx(hover.diam, focal, hover.w) * NCONF.render.discEdge
+        hoverRuntime.r = discRadiusPx(hover.diam, focalH, hover.w) * NCONF.render.discEdge
       } else {
         hoverRuntime.name = null
+      }
+
+      // ── Gaze pointer (ORB_EYE 'point' mode) ────────────────────────────
+      // The channel publishes a gaze point; here it becomes a node: a soft
+      // cone over the field with the same glow-scaled sizing the mouse uses
+      // (x pointRadiusMult), held with hysteresis (gazeFocus.ts). It shows
+      // as the violet ring - the hover ring - unless the mouse holds it.
+      const gazeLive =
+        EYE.enabled && EYE.mode === 'point' && eyeRuntime.state === 'idle' && eyeRuntime.facePresent &&
+        !store.eyeCalibrating && !store.openReport
+      const nowMs = performance.now()
+      if (gazeLive) {
+        // the channel's point is already the fixation mean (+ freeze)
+        const gx = eyeRuntime.gazeX - window.innerWidth / 2
+        const gy = eyeRuntime.gazeY - window.innerHeight / 2
+        gazeRuntime.fixationN = eyeRuntime.fixationN
+        const cands: GazeCandidate[] = []
+        for (const n of built.nodes) {
+          const p = projectNode(n, physics.yaw, physics.pitch, view)
+          if (p.w <= 0) continue
+          const diam = built.diamByName.get(n.name) ?? NCONF.render.tierDiam[n.tier]
+          const visR = discRadiusPx(diam, focalH, p.w) * NCONF.render.discEdge
+          const r = Math.max(EYE.pointMinRadiusPx, visR * EYE.pointRadiusMult)
+          const dist = Math.hypot(p.x - gx, p.y - gy)
+          if (dist <= r * EYE.pointReleaseFactor) cands.push({ name: n.name, dist, r })
+        }
+        gazeFocus.current = stepGazeFocus(gazeFocus.current, cands, nowMs, {
+          holdMs: EYE.pointHoldMs, releaseFactor: EYE.pointReleaseFactor, switchMargin: EYE.pointSwitchMargin,
+        })
+        gazeRuntime.live = true
+        gazeRuntime.x = gx
+        gazeRuntime.y = gy
+        const g = gazeFocus.current
+        if (g.name) {
+          const node = built.nodesByName.get(g.name)!
+          const p = projectNode(node, physics.yaw, physics.pitch, view)
+          const diam = built.diamByName.get(node.name) ?? NCONF.render.tierDiam[node.tier]
+          gazeRuntime.name = g.name
+          gazeRuntime.nodeX = p.x
+          gazeRuntime.nodeY = p.y
+          gazeRuntime.nodeR = discRadiusPx(diam, focalH, p.w) * NCONF.render.discEdge
+          gazeRuntime.heldMs = nowMs - g.since
+          if (!hover) {
+            hoverRuntime.source = 'gaze'
+            hoverRuntime.name = g.name
+            hoverRuntime.x = p.x
+            hoverRuntime.y = p.y
+            hoverRuntime.r = gazeRuntime.nodeR
+          }
+          // Dwell confirm (opt-in, pointDwellMs > 0): once per focus.
+          if (EYE.pointDwellMs > 0 && !g.dwelled && nowMs - g.since >= EYE.pointDwellMs) {
+            gazeFocus.current = { ...g, dwelled: true }
+            bus.emit({ type: 'tap' }) // an unpositioned confirm: routed to the gazed node above
+          }
+        } else {
+          gazeRuntime.name = null
+          gazeRuntime.heldMs = 0
+        }
+      } else {
+        if (gazeFocus.current.name !== null || gazeRuntime.live) gazeFocus.current = createGazeFocus()
+        gazeRuntime.live = false
+        gazeRuntime.name = null
+        gazeRuntime.heldMs = 0
       }
     }
 
@@ -1328,6 +1413,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       centerK: center.current.k,
       push,
       hovered: hoverRuntime.name,
+      gazed: gazeRuntime.live ? gazeRuntime.name : null,
+      gazeLive: gazeRuntime.live,
       pointedTier: pointRuntime.tier,
       targetable: pointRuntime.targetableCount,
       yaw: physics.yaw,

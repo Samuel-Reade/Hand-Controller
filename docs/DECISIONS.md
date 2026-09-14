@@ -732,3 +732,232 @@ second click enters the shell."
   colour) instead of the node's hue lifted toward white - so both control
   marks read as one system. Gate: extent = half the node's visible radius
   (25.5 of 51 px), colour rgb(166, 107, 255).
+
+## Gaze channel E1-E3 (2026-09-10, ORB_EYE_SPEC route A)
+Built slices E1-E3 of docs/ORB_EYE_SPEC.md; E4 (calibration) deferred per
+its §9/§11. Route A: gaze STEERS the field toward the fixed sight; it never
+points and never confirms. Departures and findings, each deliberate:
+- **How torque reaches the frozen integrator.** The spec assumed `move`
+  alone would do; the integrator applies `move` only while ENGAGED. The
+  channel therefore opens its own engagement (`engage`, tagged
+  `source:'gaze'`), streams `move`, and closes with `lost` - a freeze, never
+  `release` (a throw). If a hand engages meanwhile the hand simply takes
+  the engagement; gaze stops emitting and does not `lost` it out from under
+  the hand. The sight's "confirming" state ignores gaze-sourced engages.
+  No `gazeTorque` FEEL profile was added: the torque is bounded by
+  construction (mag x maxDegPerSec x dt) and the integrator has no
+  velocity cap to lower while engaged, so the profile had nothing to do.
+- **Gate timers run on the UNFILTERED point.** With the timers on the
+  filtered point, the One Euro tail after a 250 ms glance kept the point
+  outside the dead zone for ~500 ms and a glance attended. The torque still
+  uses the filtered point, so the drift is smooth. (Test: glance = 0 moves.)
+- **Idle with no face stays idle.** The spec's diagram sends idle -> holding
+  on lost face, which loops idle > holding > decaying > idle forever with
+  the face absent. Only `attending` holds and decays; a face returning
+  within holdMs resumes attending with no `lost` (a blink never stutters).
+- **A present face keeps the camera alive.** The no-hand auto-stop (20 s)
+  would end every hands-free gaze session; with the channel enabled, a
+  detected face counts as presence for that timer. Without the channel,
+  hands alone count, as before.
+- **Mouse priority is a grace window**, not strict recency: any pointer
+  event within `resumeMs` suspends the channel. Strict "more recent than the
+  last gaze frame" would suspend for ~one frame only, since gaze frames
+  arrive at 30 Hz.
+- **detectEveryNFrames defaults to 2.** Every frame dropped 5 % of frames
+  to 33 ms in the headless gate (CPU delegate, ~8 ms/call); every 2nd frame
+  added nothing measurable over hands-only. The spec's absolute
+  "p95 <= 16.7 ms" is unreadable headless - the renderer idles at p95 18.3
+  ms with no camera at all - so the gate measures the eye's ADDED cost
+  (p95 within 2 ms of hands-only, median a 60 fps frame). The demo
+  hardware decides the absolute number (§11.6).
+- **"Nothing leaves the device" was not true before this work.**
+  @mediapipe/tasks-vision POSTs usage telemetry to odml.pa.googleapis.com
+  unconditionally (on a 60 s timer and on close), for the hand model as
+  much as the face model. `index.html` now carries a Content-Security-Policy
+  `connect-src 'self'` (plus localhost for Vite HMR); the browser refuses
+  the request. The gate counts CSP violations to show the block happening
+  and fails on any off-origin RESPONSE.
+- **Ink token.** The palette has no ink token yet; the indicator, debug
+  dot and ring use the HUD's ivory. Violet is used only for the EYE toggle.
+- **Escape** while attending suspends the channel for resumeMs (it also
+  goes home, as before): one key, every meaning "stop".
+- Human gates still open (need a real face): the yaw sign convention
+  (flip in one place in `headPose` if reversed - the transform decomposition
+  encodes the assumption "a turn to the user's right is R_y(-θ)"), the
+  transform-vs-landmark agreement, glasses -> head-only, and the E3 feel of
+  the drift (symptom -> slider table in the spec §9).
+
+## Eye tracking: the eyes POINT (2026-09-10, user direction - reverses ORB_EYE route A)
+"it tracks my head movement and nods but not my eyes. I want it to track
+my eyes and track what nodes my eyes are focused on so that they can be
+selected."
+- Route A (gaze steers the field) is set aside; the user's product call is
+  route B, made as accurate as a webcam allows. The spec's accuracy warning
+  stands and was communicated: uncalibrated iris gaze is coarser than the
+  node spacing, so the focus is a SOFT CONE with hysteresis and needs
+  calibration to be good. `EYE.mode` = 'point' (default) | 'steer' (kept,
+  `?eyeMode=steer`).
+- Why it read as head-only: route A weighted head pose over iris by design
+  (irisGainDeg 12, the blendshape cross-check halving it, head-only
+  fallback). Point mode: irisGainDeg 30 (a full deflection reaches the
+  screen edge), the cross-check off by default, and the iris is a
+  weighted mix of the geometric placement and the model's own eyeLook*
+  blendshapes (`irisBlendWeight` 0.5) - on real webcams the blendshapes are
+  often the steadier of the two, especially vertically, where the lid gap
+  the geometry divides by closes as the eyes look down.
+- Calibration (E4, now essential, `EyeCalibration`): five ivory targets
+  (centre, four corners at calInset), 1.6 s each, the filtered FEATURES of
+  the last second median-pooled, then a ridge-regularised least-squares
+  map per axis: x = a0 + a1·headYaw + a2·irisX (y likewise). The fit
+  learns this user's head-vs-eye mix AND the sign convention (tested with
+  a reversed axis), which retires the "flip yaw in one place" human gate.
+  Rejected above calMaxResidualPx; session only; the HUD shows "CAL 38PX"
+  or "CAL FAILED"; Escape cancels. The gaze pointer is suspended while the
+  targets are up.
+- Focus model (`neural/gazeFocus.ts`): every node gets a capture radius =
+  max(pointMinRadiusPx 70, visible radius x pointRadiusMult 4) - bigger
+  posts are easier targets, as for the mouse; the node the gaze is most
+  centred on is the candidate; it must be the best for pointHoldMs (120)
+  to take the focus and is dropped only after leaving its release cone
+  (pointReleaseFactor 1.6) for as long. Tested: a 30 Hz jitter between two
+  nodes never flickers.
+- Feedback: the focused node gets the violet ring (dashed, to say "eyes",
+  not "mouse"); an ivory gaze dot shows where the system thinks the eyes
+  are - the feedback that was missing. The channel publishes the point;
+  the scene does the focusing because it owns the projections.
+- Confirm: an UNPOSITIONED tap (Enter, pinch-tap) with a focused node acts
+  on it exactly as a click would - select (centre, marker, camera in),
+  then enter (the shell). The sight model remains the fallback. Dwell is
+  opt-in (`pointDwellMs`, 0 = off): "never primary" holds by default.
+- Arbitration unchanged: the mouse (resumeMs grace), a hand engage, a tap
+  and the shell all suspend the pointer.
+- Gate: `eye-point` scenario - the focus lands 2.2 px from the gaze inside a
+  70 px cone; Enter selects it; the eyes follow it to the centre and Enter
+  again opens the shell on it. Steer gates run with `?eyeMode=steer`.
+- Open at the human gate: the real accuracy on your camera, before and
+  after calibration (watch the ivory dot; then CALIBRATE), and whether
+  pointMinRadiusPx needs to grow for it.
+
+### Follow-up (2026-09-10): "CAL FAILED both times"
+- Root cause in the fit: the ridge regulariser was a FIXED λ = 0.5 in
+  feature units. Head yaw is in degrees (Σu² in the tens) so it barely
+  noticed; the iris is in [-1, 1] and moves a few tenths across five
+  targets (Σv² ~ 0.1), so λ crushed the eye gain toward zero, the fit
+  degenerated to head-only, and the residual sailed past 120 px. The ridge
+  is now RELATIVE to each feature's own energy (0.1 %): a stability guard,
+  not shrinkage. (Synthetic recovery: 55.8 px -> 2.5 px.)
+- Acceptance: under `calMaxResidualPx`, OR clearly better (< 80 %) than
+  the default map on the same samples AND under twice the threshold -
+  labelled "CAL nPX (COARSE)". A least-squares fit beats a fixed map on its
+  own samples almost by definition, hence the cap.
+- The HUD now says WHY: "CAL FAILED · NO FACE 2/5" (face not seen while
+  sampling), "· NO SPREAD" (singular), "· 212PX > 120" (residual). DEV: the
+  samples and report land in `window.__eyeCal` and a `[eye] calibration`
+  console line, for pasting back. `calNinePoints`, `calPointHoldMs`,
+  `calSampleWindowMs`, `calInset`, `calMaxResidualPx` are on the leva panel.
+
+### Accuracy pass (2026-09-10, user direction: "whatever makes stare selection more accurate")
+Levers pulled, in order of expected gain; each on a slider.
+- **Nine targets at 0.65 of the half-extent** (`calNinePoints` true,
+  `calInset` 0.65): redundancy for the fit, coverage of where the nodes are.
+  ~14 s.
+- **Curvature correction, validated.** After the linear fit, a 6-term
+  quadratic in the linear prediction's normalised position is fitted to
+  its residuals - the asymmetry (an off-centre camera) and the cross-axis
+  coupling (perspective) a 3x3 grid can see. Kept only if it beats the
+  linear map under leave-one-out by 5 %, and only with >= 8 samples; the
+  HUD label gains "·C". An odd, symmetric bend is invisible on three
+  levels per axis and is not attempted (5 levels would be a 25-target run).
+- **720p camera** (`ideal`, 480p cameras still work): the face model
+  resizes its face crop to 256 px; at 480p a face at desk distance is ~200
+  px and was UPSAMPLED into the model. Gate: +0 ms on p95, face detect
+  8.1 ms.
+- **Fixation averaging** (`fixationMs` 250, `fixationRadiusPx` 90): the
+  focus uses the mean of the recent points that cluster with the latest,
+  not one frame - per-frame jitter of 1-2° divided by ~2.8; a saccade
+  stands alone at once. Tested: 30 px jitter -> < 12 px rms.
+- **Blink freeze** (`blinkFreeze`): with both eyes shut the features hold;
+  a real blink drags the eyeLook* blendshapes and yanked the point.
+- **Smoothing** for a stare: `minCutoffHz` 1.2 -> 0.9; `pointHoldMs` 120
+  -> 160.
+- Not changed: use-time iris jitter is physics (a dozen-pixel iris); the
+  floor stays ~1-2°, which is why the cone + hysteresis remain.
+
+### Accuracy pass 2 (2026-09-11, user direction): learning from confirms
+- **Every confirm is a verified sample.** When Enter / a pinch-tap / dwell
+  acts on a gazed node, the ring was on the node the user wanted: the
+  features of that moment map to that node's screen position. The sample
+  joins the explicit run's (the base) in an online store
+  (`eye/calibration.ts` learnConfirm; `useEyeInput.eyeLearn`), newest 30
+  kept, and the map is refitted on every confirm. The map sharpens with use
+  and follows a head that leans or shifts - drift the nine rings could
+  never see. Without an explicit run, a learned map appears after
+  `learnMinSamples` (6) confirms.
+- **Fresh confirms outweigh a stale base.** Weighted least squares: the
+  base's weight decays from 1 to a floor of 0.2 over the first 12 confirms
+  (`baseWeight`). Adoption compares WEIGHTED residuals - with an unweighted
+  check the down-weighted base still dominated the average and real
+  improvements were refused (found by the head-shift test).
+- **Outliers are judged against the confirms' own consensus** (3x their
+  median error, never below `learnOutlierPx` 70): a wrong confirm is
+  dropped once; a consistent 90 px disagreement with the base is a head
+  shift, not noise (the first rule dropped every drift sample).
+- **The two iris sources are separate fit features.** x = a0 + a1·headYaw +
+  a2·irisGeom + a3·irisBlend. The fit learns which source to trust on
+  this camera (glasses: geometry is noise; contacts: the blendshapes may
+  be) - tested both ways, the useless gain lands under 10 % of the useful
+  one. The default map still blends them by `irisBlendWeight`.
+- **The fixation window grows** from `fixationMs` (250) to
+  `fixationMaxMs` (500) while the stare holds: ~15 frames in the mean for a
+  steady stare, no extra lag on a fresh one; a saccade resets it.
+- HUD: "CAL 38PX ·C (13)" - residual, curvature flag, samples in the map.
+  DEV: `window.__eyeOnline`, a `[eye] learn` console line per confirm.
+- Gate: the point-mode confirm lands as a learned sample.
+
+## Eye accuracy plan, phases 1-5 built (2026-09-13, user direction: "implement those changes")
+Built in one uncommitted pass (the user asked for no commits); each idea has
+its own test and its own slider so it can still be judged alone. Numbers
+are from the replay harness on SYNTHETIC clips (white-noise jitter, 1-1.5°);
+the real recordings decide.
+- **Phase 1 - measure.** Overlay diagnostics (ink): raw point (hollow dot),
+  head-only point (square), per-eye iris and per-eye blendshape bars, iris
+  ok rate per eye, detection Hz, freeze / wide-model flags, eyes-vs-head
+  distance. A dev recorder (`window.__eyeRecord(10)` / the leva "record 10 s"
+  button) saves raw frames to JSON; `eye/replay.ts` runs a recording through
+  the pure pipeline and prints rest jitter (raw / filtered, per axis),
+  saccade response and settle, truth error, frozen fraction, eye
+  contribution. Recordings rebuild synthetic faces from the raw features so
+  the whole channel runs unchanged.
+- **Phase 2 - signal.** Foreshortening (iris x cos yaw, y cos pitch); eye
+  quality weights ((1 - blink) x apparent size) with a vergence drop (the
+  eye farther from the blendshapes goes when L/R disagree > 0.3); blink
+  edges (iris rejected at 0.3 on the way down, the first reopen frame
+  held). The eyeball-centre model is NOT built: it is gated on the
+  head-turn recording showing the calibration breaking down.
+- **Phase 3 - steadiness.** Median-of-3 before the One Euro on every
+  feature; separate cutoffs (head 1.5 Hz, iris 0.7 Hz); the fixation mean
+  MOVED INTO THE CHANNEL ahead of a speed-gated freeze (below 60 px/s for
+  100 ms -> hold; release above 160 px/s; re-snap once the mean has moved
+  > 30 px). Finding: the freeze must watch the fixation mean, not the
+  filtered point - on the filtered point it engaged 6 % of the time at
+  1.5° jitter; on the mean, 99 %. Finding: a 12 px re-snap tolerance fired
+  on noise and undid the freeze; 30 px holds the rest clip at 0.3 px rms
+  (from 6.4) with saccade response 0.96 and settle 125 ms. Finding: the
+  median costs exactly one frame (33 ms) per saccade, which the truth-error
+  metric weights heavily (66 -> 95 px on the saccade clip) but a selector
+  with a 160 ms hold will not feel; kept for spike removal (a spike would
+  release the freeze). Separate cutoffs and the median are neutral on
+  white noise (+0.5 / +1 px); their value is on real landmark data.
+- **Phase 4 - the map.** GazeFeatures carries per-eye iris and per-eye
+  blendshapes (14 features, 14 filters). A 'wide' model (6 terms per axis)
+  is tried at >= 14 samples and kept only if it beats the base under
+  leave-one-out by 5 % (tested: one eye noise -> wide wins, residual
+  halved). Learned samples decay with age (half-life `learnDecayMin` 3,
+  floor 0.3): a session that drifts twice follows the recent drift.
+- **Phase 5 - the selector.** Switch margin: a rival must beat the focused
+  node's score by 0.8x before the switch clock starts (a near-tie stays).
+  Ring confidence: the gaze ring brightens with fixation length and goes
+  solid at ~10 agreeing frames.
+- Tests 237 (+12). verify-eye 11/11, verify-centering 13/13.
+- Still open, needs the user: the four recordings; which symptom
+  dominated; the eyeball model decision; retuning cutoffs from real data.

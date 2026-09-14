@@ -30,6 +30,11 @@ export function CameraConsent() {
   const count = useStore((s) => s.handCount)
   const zoom = useStore((s) => s.handZoom)
   const synthetic = useStore((s) => s.inputMode === 'synthetic')
+  const eyeEnabled = useStore((s) => s.eyeEnabled)
+  const setEyeEnabled = useStore((s) => s.setEyeEnabled)
+  const calibrating = useStore((s) => s.eyeCalibrating)
+  const setCalibrating = useStore((s) => s.setEyeCalibrating)
+  const calResult = useStore((s) => s.eyeCalResult)
   const wide = useViewportWide()
 
   // Pointer-only below the responsive cutoff, and without getUserMedia the
@@ -60,6 +65,27 @@ export function CameraConsent() {
           <span className="hand-state" data-state={state.toLowerCase()}>
             {state}
           </span>
+          {/* ORB_EYE_SPEC §7: the gaze channel's opt-in. Violet because it is
+              pressable; disabled until the camera is on, and never a prompt. */}
+          <button
+            type="button"
+            className="hand-link hand-link-eye"
+            aria-pressed={eyeEnabled}
+            onClick={() => setEyeEnabled(!eyeEnabled)}
+          >
+            {eyeEnabled ? 'EYE ON' : 'EYE'}
+          </button>
+          {eyeEnabled && (
+            <button
+              type="button"
+              className="hand-link hand-link-eye"
+              disabled={calibrating}
+              onClick={() => setCalibrating(true)}
+              title="Five targets, about eight seconds. Session only."
+            >
+              {calibrating ? 'CALIBRATING…' : (calResult ?? 'CALIBRATE')}
+            </button>
+          )}
           {synthetic ? (
             <span className="hand-state">SYNTHETIC</span>
           ) : (

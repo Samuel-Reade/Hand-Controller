@@ -12,8 +12,10 @@ import { useEffect } from 'react'
 import type { HandLandmarker, NormalizedLandmark } from '@mediapipe/tasks-vision'
 import type { InputBus } from './InputBus'
 import { createMultiHandPipeline } from './handArbiter'
-import { drawHands, handRuntime } from './handThumbnail'
+import { drawEyeIndicator, drawHands, handRuntime } from './handThumbnail'
 import { useStore } from '../store'
+import { eyeChannel, eyeControl } from './useEyeInput'
+import { eyeRuntime } from './eye/channel'
 
 export { handRuntime } from './handThumbnail'
 
@@ -46,8 +48,15 @@ export function useHandInput(bus: InputBus): void {
       starting = true
       setStatus('starting')
       try {
+        // 1280x720 (was 640x480): the face model crops the face and resizes
+        // it to its own 256 px input, and at 480p a face at desk distance is
+        // ~200 px wide - UPSAMPLED into the model, so the iris is a dozen
+        // blurry pixels. At 720p the crop is downsampled instead. The hand
+        // model is unaffected (its own crops), the frame upload is bigger;
+        // the eye gate measures the cost. `ideal`, so a 480p-only camera
+        // still works.
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, frameRate: 30 },
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
           audio: false,
         })
       } catch (err) {
@@ -144,10 +153,17 @@ export function useHandInput(bus: InputBus): void {
         }
         for (const e of pipeline.process(hands, now)) bus.emit(e)
       }
+      // ORB_EYE_SPEC E1: the face model runs on the SAME frame, hand first.
+      // The channel itself decides whether it may act (shell open, mouse
+      // recent, hand engaged); here it only sees the frame.
+      eyeControl.detect(video, now)
       drawThumbnail(hands)
 
       const present = hands.length > 0
-      if (present) lastHandSeen = now
+      // ORB_EYE_SPEC: with the gaze channel on, a present face keeps the
+      // camera alive too - a hands-free steering session must not be cut
+      // off by the no-hand timer. Without the channel, hands alone count.
+      if (present || (eyeChannel.enabled && eyeRuntime.facePresent)) lastHandSeen = now
       if (store.handPresent !== present) store.setHandPresent(present)
       const engaged = pipeline.state.single.phase === 'engaged'
       if (store.handEngaged !== engaged) store.setHandEngaged(engaged)
@@ -181,6 +197,7 @@ export function useHandInput(bus: InputBus): void {
         pipeline.state.zooming,
       )
       ctx.restore()
+      drawEyeIndicator(ctx, w, h, eyeRuntime)
     }
 
     function stopTracks(): void {
@@ -198,6 +215,7 @@ export function useHandInput(bus: InputBus): void {
       clearTimeout(timer)
       landmarker?.close()
       landmarker = null
+      eyeControl.stop()
       video?.pause()
       video = null
       stopTracks()

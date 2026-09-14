@@ -390,6 +390,108 @@ body {
   color: var(--ice);
 }
 
+/* ORB_EYE_SPEC §7: the gaze opt-in is a control - violet, pressable. */
+.hand-link-eye {
+  color: rgb(166 107 255 / 0.85);
+  margin: 6px 12px 0;
+}
+.hand-link-eye:hover,
+.hand-link-eye[aria-pressed='true'] {
+  color: #a66bff;
+}
+.hand-link-eye[aria-pressed='true'] {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ORB_EYE_SPEC §6 showDebug: ink gaze dot, dead-zone ring, state label. */
+.eye-debug {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.eye-debug-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px dashed rgb(234 230 218 / 0.35);
+  border-radius: 50%;
+}
+.eye-debug-dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: rgb(234 230 218 / 0.9);
+  box-shadow: 0 0 6px rgb(234 230 218 / 0.5);
+}
+.eye-debug-raw {
+  background: transparent;
+  border: 1.5px solid rgb(234 230 218 / 0.8);
+  box-shadow: none;
+}
+.eye-debug-head {
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 1px;
+  background: rgb(234 230 218 / 0.7);
+  box-shadow: none;
+}
+.eye-debug-bars {
+  position: absolute;
+  left: 26px;
+  top: 96px;
+  width: 220px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: rgb(234 230 218 / 0.6);
+}
+.eye-debug-bar {
+  position: relative;
+  height: 12px;
+  margin-bottom: 3px;
+  background: rgb(234 230 218 / 0.08);
+}
+.eye-debug-bar::before {
+  content: attr(data-name);
+  position: absolute;
+  left: 4px;
+  top: 0;
+  line-height: 12px;
+  white-space: pre;
+}
+.eye-debug-bar::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgb(234 230 218 / 0.35);
+}
+.eye-debug-bar-fill {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: rgb(234 230 218 / 0.5);
+}
+.eye-debug-label {
+  position: absolute;
+  left: 26px;
+  top: 26px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: rgb(234 230 218 / 0.7);
+  white-space: pre;
+}
+
 .hand-hud {
   position: absolute;
   left: 26px;
@@ -551,6 +653,74 @@ body {
   opacity: 0;
   box-shadow: 0 0 6px rgba(166, 107, 255, 0.45);
   transition: opacity 90ms;
+}
+/* The gaze pointer's ring is dashed: the eyes are on it, not the mouse. Its
+   opacity rises with fixation confidence (set inline) and it goes solid
+   once the stare has settled (~10 agreeing frames). */
+.crosshair-hover[data-source='gaze'] {
+  border-style: dashed;
+}
+.crosshair-hover[data-source='gaze'][data-confident='1'] {
+  border-style: solid;
+}
+
+/* ORB_EYE point mode: where the system thinks the eyes are. Ivory (data). */
+.crosshair-gaze {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border-radius: 50%;
+  background: rgb(234 230 218 / 0.55);
+  box-shadow: 0 0 8px rgb(234 230 218 / 0.35);
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+/* Calibration targets (ivory, data): a ring with a dot, one at a time. */
+.eye-cal {
+  position: absolute;
+  inset: 0;
+  background: rgb(7 10 21 / 0.55);
+  z-index: 5;
+}
+.eye-cal-target {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid rgb(234 230 218 / 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgb(234 230 218 / 0.4);
+}
+.eye-cal-target::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: rgb(234 230 218 / 0.95);
+}
+.eye-cal-target[data-sampling='1'] {
+  border-color: #a66bff;
+}
+.eye-cal-note {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgb(234 230 218 / 0.7);
 }
 .crosshair-mark-arm.n,
 .crosshair-mark-arm.s {

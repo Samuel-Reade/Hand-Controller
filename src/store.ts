@@ -33,6 +33,9 @@ interface AppState {
   handEngaged: boolean
   handCount: number // 0 / 1 / 2 tracked hands (ORB_ZOOM_SPEC HUD)
   handZoom: boolean // the two-pinch zoom is engaged
+  eyeEnabled: boolean // ORB_EYE_SPEC: the gaze channel opt-in (separate from camera consent)
+  eyeCalibrating: boolean // the calibration flow is on screen (gaze pointer suspended)
+  eyeCalResult: string | null // last calibration outcome for the HUD ("CAL 38PX" / "CAL FAILED")
   setFocus(focus: FocusRef): void
   openFocused(): void
   openNode(node: string, tier: string): void
@@ -43,6 +46,9 @@ interface AppState {
   setHandEngaged(handEngaged: boolean): void
   setHandCount(handCount: number): void
   setHandZoom(handZoom: boolean): void
+  setEyeEnabled(eyeEnabled: boolean): void
+  setEyeCalibrating(eyeCalibrating: boolean): void
+  setEyeCalResult(eyeCalResult: string | null): void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -54,6 +60,9 @@ export const useStore = create<AppState>((set, get) => ({
   handEngaged: false,
   handCount: 0,
   handZoom: false,
+  eyeEnabled: false,
+  eyeCalibrating: false,
+  eyeCalResult: null,
   setFocus: (focus) => set({ focus }),
   openFocused: () => {
     const { focus } = get()
@@ -67,4 +76,7 @@ export const useStore = create<AppState>((set, get) => ({
   setHandEngaged: (handEngaged) => set({ handEngaged }),
   setHandCount: (handCount) => set({ handCount }),
   setHandZoom: (handZoom) => set({ handZoom }),
+  setEyeEnabled: (eyeEnabled) => set({ eyeEnabled, ...(eyeEnabled ? {} : { eyeCalibrating: false, eyeCalResult: null }) }),
+  setEyeCalibrating: (eyeCalibrating) => set({ eyeCalibrating }),
+  setEyeCalResult: (eyeCalResult) => set({ eyeCalResult }),
 }))

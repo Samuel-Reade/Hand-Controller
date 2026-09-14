@@ -6,6 +6,7 @@
 // image-normalized; callers set up the mirror transform.
 
 import { TOKENS } from '../config/tokens'
+import type { EyeTelemetry } from './eye/channel'
 import type { Landmark } from './landmarks'
 
 /** MediaPipe's 21-point hand skeleton (HandLandmarker.HAND_CONNECTIONS). */
@@ -28,6 +29,56 @@ interface HandRuntime {
 }
 
 export const handRuntime: HandRuntime = { thumbnail: null }
+
+/**
+ * ORB_EYE_SPEC §7: the live-gaze indicator - a small INK iris glyph in the
+ * thumbnail's corner, filled while the channel may act (idle / attending),
+ * hollow while it may not (suspended / holding / decaying), with a second
+ * ring when the channel is head-pose only. Ink, because it reports a state
+ * - rendered with the HUD's ivory until Rally's ink token lands (never
+ * violet: that is for pressable controls only). Drawn in canvas space (not
+ * mirrored) after the hands. Absent when off.
+ */
+export function drawEyeIndicator(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  _h: number,
+  eye: EyeTelemetry,
+): void {
+  if (eye.state === 'off') return
+  const cx = w - 12
+  const cy = 12
+  const live = eye.state === 'idle' || eye.state === 'attending'
+  ctx.save()
+  ctx.strokeStyle = TOKENS.ivory
+  ctx.fillStyle = TOKENS.ivory
+  ctx.lineWidth = 1.2
+  // the eye outline
+  ctx.beginPath()
+  ctx.moveTo(cx - 7, cy)
+  ctx.quadraticCurveTo(cx, cy - 6, cx + 7, cy)
+  ctx.quadraticCurveTo(cx, cy + 6, cx - 7, cy)
+  ctx.stroke()
+  // the iris: filled = may act, hollow = may not
+  ctx.beginPath()
+  ctx.arc(cx, cy, 2.4, 0, Math.PI * 2)
+  if (live) ctx.fill()
+  else ctx.stroke()
+  // head-only: a second ring
+  if (eye.headOnly) {
+    ctx.beginPath()
+    ctx.arc(cx, cy, 4.2, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+  // attending: a short tick in the torque direction
+  if (eye.state === 'attending' && eye.mag > 0) {
+    ctx.beginPath()
+    ctx.moveTo(cx, cy)
+    ctx.lineTo(cx + eye.dirX * 9, cy + eye.dirY * 9)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
 
 export function drawHands(
   ctx: CanvasRenderingContext2D,

@@ -11,4 +11,6 @@ export const cursorRuntime = {
   inside: false,
   /** a button is down (dragging or about to tap) */
   down: false,
+  /** performance.now() of the last pointer event; 0 = none yet (gaze arbitration) */
+  lastEventAt: 0,
 }

@@ -100,6 +100,8 @@ export const centerRuntime = {
 export const hoverRuntime = {
   /** the node (or level-1 shell report id) under the cursor, or null */
   name: null as string | null,
+  /** who put it there: the mouse, or the gaze pointer (ORB_EYE point mode) */
+  source: 'mouse' as 'mouse' | 'gaze',
   /** its projected px offset from screen centre */
   x: 0,
   y: 0,

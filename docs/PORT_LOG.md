@@ -804,3 +804,106 @@ Decisions: docs/DECISIONS.md (2026-09-10, "Strings run into the core").
   P3 endpoint test split into centre/inset contracts. 175 total.
 - verify-neural 7/7 (white-clip 0.21 -> 0.24%, 7x 14.0), verify-pointing 9/9.
 - Shot: shots/after-strings.png (4.5x).
+
+# ORB_EYE E1-E3: gaze steering channel (2026-09-10)
+
+Decisions: docs/DECISIONS.md (2026-09-10, "Gaze channel E1-E3").
+- Pure pipeline `src/input/eye/face.ts` (headPose transform + landmark
+  fallback, irisOffset, blendshape cross-check, gazeAngles, screenPoint,
+  confidence), `eye/channel.ts` (regionGate hysteresis on the RAW point,
+  torque, the six-state machine, arbitration), `eye/config.ts` (EYE +
+  EYE_DEFAULTS), `eye/__synthetic__/face.ts` (13-landmark synthetic head).
+- Shell `src/input/useEyeInput.ts`: FaceLandmarker lifecycle on the hand
+  shell's frames (`eyeControl.detect` from useHandInput, hand first), the
+  bus bridge, DEV seams `__eyeInfo / __eyeLog / __eyeConf`. HUD: violet EYE
+  toggle (CameraConsent), ivory iris glyph in the thumbnail
+  (handThumbnail.drawEyeIndicator), `EyeDebug` overlay, `EyeControls` leva
+  folder. Store: `eyeEnabled`. `InputBus`: `source?: 'gaze'` on
+  engage/move/lost. `dev/syntheticEye.ts`: six scenarios via
+  `?input=synthetic&scenario=eye-*&eye=1`.
+- Vendored `public/models/face_landmarker.task` (3.76 MB, float16 v1).
+- `index.html`: Content-Security-Policy connect-src 'self' (+ localhost dev)
+  - MediaPipe's unconditional telemetry POST to odml.pa.googleapis.com is
+  now refused by the browser (2 attempts blocked in the gate).
+- Tests `tests/eye.test.ts` 15 (spec tests 1-9 + torque sign, blink
+  hold, mouse/shell/tap suspension). 206 total.
+- Gate `scripts/verify-eye.mjs` 8/8: fps on a fake camera with BOTH models
+  (hands-only p95 18.2 / median 16.7; +eye every 2nd frame p95 18.2 /
+  median 16.7 / detect 7.9 ms; every frame p95 33.3 -> default cadence 2),
+  no off-origin responses, glance 0.000°, sweep 26.3°, hand-mix 282 gaze
+  moves / 0 inside 600 ms of the release, lost = attending > holding >
+  decaying > idle, no errors. verify-centering 13/13 unchanged.
+- Shots: shots/eye-e1-hud.png (fake camera + EYE ON + glyph),
+  shots/eye-e3-sweep-debug.png (ring, dot, state label).
+- NOT built: E4 calibration (§9: cut if the E3 human gate says the coarse
+  drift suffices). The E1/E3 human gates need a real face: yaw sign, the
+  transform-vs-landmark agreement, and the feel of the drift.
+
+# ORB_EYE point mode + calibration (2026-09-10)
+
+Decisions: docs/DECISIONS.md (2026-09-10, "Eye tracking: the eyes POINT").
+- `eye/face.ts`: gazeFeatures (head + blended iris), Calibration map,
+  screenPointFrom/Default. `eye/calibration.ts`: targets, ridge LSQ fit,
+  rejection, medianFeatures. `eye/channel.ts`: filters the four FEATURES,
+  maps through the calibration, 'point' mode (no engagement, no torque).
+  `neural/gazeFocus.ts`: stepGazeFocus + gazeRuntime. Scene: per-frame
+  gaze focus -> hover ring (source 'gaze'), unpositioned tap -> click on the
+  gazed node, opt-in dwell. `ui/EyeCalibration.tsx` + HUD CALIBRATE; ivory
+  gaze dot in the Crosshair overlay. `dev/syntheticEye.ts`: `eye-point`.
+- Tests: tests/eye.test.ts 24 (+9: features blend, default map reach,
+  fit recovery incl. reversed sign, rejection, focus acquire / no-flicker /
+  switch+release / size wins, point-mode channel). 215 total.
+- verify-eye 11/11 (fps every frame now passes headless: +0.1 ms p95 over
+  hands-only; point-focus 2.2 px / 70 px cone; point-select; point-enter),
+  verify-centering 13/13.
+- Shots: shots/eye-point-focus.png, shots/eye-point-shell.png.
+
+# Eye accuracy pass + calibration fix (2026-09-10)
+
+Decisions: docs/DECISIONS.md ("CAL FAILED both times", "Accuracy pass").
+- `eye/calibration.ts`: relative ridge (the fixed λ crushed the iris gain -
+  every real calibration failed), FitReport with reasons, accept-if-
+  better-than-default (capped at 2x threshold), two-stage fit with
+  leave-one-out validated curvature (`quadBasis`, k x k solver).
+  `eye/face.ts`: Calibration.quad applied in screenPointFrom.
+  `eye/channel.ts`: blink freeze. `neural/gazeFocus.ts`: fixation mean.
+  `useHandInput`: 1280x720 ideal. Config: 9 points, inset 0.65,
+  minCutoff 0.9, hold 160, fixation 250/90, blinkFreeze.
+- Tests 220 (+5: curvature kept/not invented/never with 5 points,
+  fixation, blink freeze). verify-eye 11/11 (720p: p95 17.6 = hands-only,
+  detect 8.1 ms), verify-centering 13/13.
+
+# Eye accuracy pass 2: learning from confirms (2026-09-11)
+
+Decisions: docs/DECISIONS.md ("Accuracy pass 2").
+- `eye/face.ts`: GazeFeatures carries irisX/Y AND blendX/Y; irisMix;
+  linearPoint (4-term). `eye/calibration.ts`: weighted k x k lsq, 4-term
+  axes, CalibrationSample.weight, baseWeight, OnlineCalibration +
+  learnConfirm (consensus outliers, weighted adoption), mapWith.
+  `eye/channel.ts`: six feature filters. `neural/gazeFocus.ts`: growing
+  fixation window. `useEyeInput.ts`: eyeOnline / eyeSetBase / eyeLearn;
+  scene calls eyeLearn on every gaze confirm; EyeCalibration seeds the base.
+  Config: fixationMaxMs, learnFromConfirms, learnMaxSamples,
+  learnMinSamples, learnOutlierPx.
+- Tests 225 (+5: source weighting both ways, head-shift tracking, outlier
+  drop, no-base learning + cap, growing window). verify-eye 11/11
+  (learnedSamples 1 after the confirm), verify-centering 13/13.
+
+# Eye accuracy plan phases 1-5 (2026-09-13)
+
+Decisions: docs/DECISIONS.md ("Eye accuracy plan, phases 1-5 built").
+- `eye/face.ts`: per-eye EyeOffset (blink, span), quality-weighted +
+  vergence irisOffset(frame, cfg, head, blend), foreshortening, per-eye
+  BlendGaze, 14-key GazeFeatures + FEATURE_KEYS, featureRow, model tiers.
+  `eye/fixation.ts` (moved from neural/gazeFocus, re-exported).
+  `eye/channel.ts`: Median3, per-feature filters with head/iris cutoffs,
+  blink edges, fixation -> freeze (tolerance), diagnostics telemetry,
+  recorder sink. `eye/calibration.ts`: k x k weighted lsq, 'wide' model
+  under LOO, ageWeight. `eye/replay.ts`: replayRecording + formatMetrics.
+  `neural/gazeFocus.ts`: switchMargin. `Crosshair`: ring confidence.
+  `EyeDebug`: raw/head dots, bars, rates. `EyeControls`: record button +
+  15 new controls. Config: 17 new keys.
+- Tests: tests/eyeAccuracy.test.ts 12 (phases 1-5). 237 total.
+  verify-eye 11/11, verify-centering 13/13. Shot: shots/eye-diagnostics.png.
+- Synthetic replay (rest clip, 1.5° jitter): filtered rms 6.4 -> 0.3 px,
+  frozen 99 %; saccade clip: response 1.00 -> 0.96, settle 117 -> 125 ms.

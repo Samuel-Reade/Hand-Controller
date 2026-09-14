@@ -21,17 +21,22 @@
 // marker lands on top of it the sight's arms yield (data-mark-landed) so
 // there is one cross at the centre, not two.
 //
-// Hover ring (mouse): a violet circle - violet is the Rally CONTROL colour,
-// never a data colour - just outside the node under the cursor, by the same
-// hit-test a click uses. The sight's own ring is the hand model's (a click
-// never confirms at the sight), so in pointer mode it is not drawn: that
-// ring borrowed the node's hue and filled on every mouse-down, which read
-// as a red circle flashing round a selected red post.
+// Hover ring (mouse, and the gaze pointer): a violet circle - violet is the
+// Rally CONTROL colour, never a data colour - just outside the node under
+// the cursor, by the same hit-test a click uses; or, in ORB_EYE 'point'
+// mode, just outside the node the eyes are on. The sight's own ring is the
+// hand model's (a click never confirms at the sight), so in pointer mode it
+// is not drawn: that ring borrowed the node's hue and filled on every
+// mouse-down, which read as a red circle flashing round a selected red post.
+//
+// Gaze dot: while the gaze pointer is live a small ivory dot marks where
+// the system thinks the eyes are - the feedback the user needs to aim.
 
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { centerRuntime, hoverRuntime } from './centering'
 import { NCONF } from './config'
+import { gazeRuntime } from './gazeFocus'
 import { PAL } from './palette'
 import { pointRuntime } from './pointing'
 
@@ -43,6 +48,7 @@ export function Crosshair() {
   const ringRef = useRef<HTMLDivElement>(null)
   const markRef = useRef<HTMLDivElement>(null)
   const hoverRef = useRef<HTMLDivElement>(null)
+  const gazeRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let raf = 0
@@ -55,7 +61,8 @@ export function Crosshair() {
       const ring = ringRef.current
       const mark = markRef.current
       const hover = hoverRef.current
-      if (!root || !ring || !mark || !hover) return
+      const gaze = gazeRef.current
+      if (!root || !ring || !mark || !hover || !gaze) return
       const p = pointRuntime
       const pointerMode = useStore.getState().inputMode === 'pointer'
 
@@ -103,18 +110,39 @@ export function Crosshair() {
       const landedFlag = landed ? '1' : '0'
       if (root.dataset.markLanded !== landedFlag) root.dataset.markLanded = landedFlag
 
-      // The hover ring, just outside the node under the cursor.
+      // The hover ring, just outside the node under the cursor - or under
+      // the eyes (source 'gaze', any input mode).
       const h = hoverRuntime
-      if (h.name && pointerMode) {
+      const showHover = h.name !== null && (h.source === 'gaze' || pointerMode)
+      if (showHover) {
         const r = Math.max(HOVER_MIN_R_PX, Math.min(220, h.r + HOVER_PAD_PX))
         hover.style.transform = `translate(-50%, -50%) translate(${h.x.toFixed(1)}px, ${h.y.toFixed(1)}px)`
         hover.style.width = `${(r * 2).toFixed(1)}px`
         hover.style.height = `${(r * 2).toFixed(1)}px`
-        hover.style.opacity = '1'
-        if (stage && stage.style.cursor !== 'pointer') stage.style.cursor = 'pointer'
+        hover.dataset.source = h.source
+        // Ring confidence (plan phase 5): a gaze ring brightens and its
+        // dashes close up as the fixation stabilises - solid once ~10
+        // frames agree - so the user can see when a confirm will land.
+        if (h.source === 'gaze') {
+          const conf = Math.min(1, gazeRuntime.fixationN / 10)
+          hover.style.opacity = (0.45 + 0.55 * conf).toFixed(2)
+          hover.dataset.confident = conf >= 1 ? '1' : '0'
+        } else {
+          hover.style.opacity = '1'
+        }
       } else {
         hover.style.opacity = '0'
-        if (stage && stage.style.cursor) stage.style.cursor = ''
+      }
+      const mouseHover = showHover && h.source === 'mouse'
+      if (stage && stage.style.cursor !== (mouseHover ? 'pointer' : '')) stage.style.cursor = mouseHover ? 'pointer' : ''
+
+      // The gaze dot.
+      const g = gazeRuntime
+      if (g.live) {
+        gaze.style.transform = `translate(${g.x.toFixed(1)}px, ${g.y.toFixed(1)}px)`
+        gaze.style.opacity = '1'
+      } else {
+        gaze.style.opacity = '0'
       }
     }
     raf = requestAnimationFrame(tick)
@@ -132,6 +160,7 @@ export function Crosshair() {
       <span className="crosshair-arm e" />
       <div className="crosshair-ring" ref={ringRef} />
       <div className="crosshair-hover" ref={hoverRef} style={{ borderColor: PAL.violet.body }} />
+      <div className="crosshair-gaze" ref={gazeRef} />
       <div className="crosshair-mark" ref={markRef} data-landed="0">
         <span className="crosshair-mark-arm n" />
         <span className="crosshair-mark-arm s" />
