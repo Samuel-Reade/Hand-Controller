@@ -2,8 +2,16 @@
 // transient onChange writes straight into the FEEL object - physics and
 // rendering read it live, so slider moves change the very next frame with
 // zero React re-renders.
+//
+// The panel is closed by default behind a small gear in the top-right corner
+// (user direction 2026-09-14). Leva's `hidden` unmounts only the panel DOM;
+// the store and every useControls registration (this file, NeuralScene,
+// EyeControls) stay live, so reopening shows the current values. The title
+// bar's chevron closes it too - the controlled `collapsed` routes leva's
+// collapse back into the gear's state, so the two never disagree.
 
 import { Leva, useControls } from 'leva'
+import { useState } from 'react'
 import { FEEL } from '../config/feel'
 
 type NumKey = {
@@ -23,6 +31,7 @@ function slider(key: NumKey, min: number, max: number, step: number) {
 }
 
 export function FeelPanel({ hidden }: { hidden: boolean }) {
+  const [open, setOpen] = useState(false)
   useControls('rotation', {
     dragGain: slider('dragGain', 0.001, 0.02, 0.0005),
     friction: slider('friction', 0.2, 40, 0.05), // neural profile sits at 30 (no coast drift)
@@ -76,5 +85,55 @@ export function FeelPanel({ hidden }: { hidden: boolean }) {
   useControls('pointer', {
     tapMaxTravelPx: slider('tapMaxTravelPx', 2, 20, 1),
   })
-  return <Leva hidden={hidden} collapsed={false} titleBar={{ title: 'FEEL' }} />
+  return (
+    <>
+      {!hidden && (
+        <button
+          type="button"
+          className="feel-gear"
+          aria-label="Tuning panel"
+          aria-expanded={open}
+          title="FEEL"
+          onClick={() => setOpen((o) => !o)}
+        >
+          <GearIcon />
+        </button>
+      )}
+      {/* An explicit <Leva> renders its panel inline (a child of .app, not
+          leva's #leva__root portal); the wrapper is the CSS hook that hangs
+          it under the gear. */}
+      <div className="feel-leva">
+        <Leva
+          hidden={hidden || !open}
+          collapsed={{
+            collapsed: false,
+            onChange: (collapsed) => {
+              if (collapsed) setOpen(false)
+            },
+          }}
+          titleBar={{ title: 'FEEL', drag: false, filter: true }}
+        />
+      </div>
+    </>
+  )
+}
+
+/** Eight-tooth gear, stroked - the instrument register, no fill, no glow. */
+function GearIcon() {
+  const teeth: string[] = []
+  for (let i = 0; i < 8; i++) {
+    const a = (i * Math.PI) / 4
+    const c = Math.cos(a)
+    const s = Math.sin(a)
+    teeth.push(
+      `M${(8 + 4.6 * c).toFixed(2)} ${(8 + 4.6 * s).toFixed(2)}L${(8 + 6.8 * c).toFixed(2)} ${(8 + 6.8 * s).toFixed(2)}`,
+    )
+  }
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="4.6" fill="none" stroke="currentColor" strokeWidth="1.1" />
+      <circle cx="8" cy="8" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.1" />
+      <path d={teeth.join('')} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
 }

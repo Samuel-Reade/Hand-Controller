@@ -183,7 +183,10 @@ export default function App() {
           {neural && <Crosshair />}
           {neural && <EyeDebug />}
           {neural && <EyeCalibration />}
-          <OrbitIndex bus={bus} />
+          {/* The orbit index is the globe's category ladder. The neural scene
+              has no category grid to walk (user direction 2026-09-14: remove
+              it); ?scene=globe keeps it. docs/DECISIONS.md. */}
+          {!neural && <OrbitIndex bus={bus} />}
           <CameraConsent />
           <Telemetry />
         </>

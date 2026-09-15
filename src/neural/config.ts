@@ -184,8 +184,9 @@ export interface PointConfig {
   tieBandPx: number       // within this, the nearer-camera node wins
   highlightSwell: number  // scale multiplier on the acquired node
   ringOpacity: number
-  // free rotation profile (PT2 - declared now, unused until then)
-  pitchClampFree: number  // rad (~±94.5°); replaces the ±1.1 category clamp
+  // free rotation profile (PT2 - declared now, unused until then).
+  // No pitch clamp key: the neural scene rotates without limits on either
+  // axis (user direction 2026-09-14) and passes Infinity to the integrator.
   magnetStrength: number  // torque toward centering the nearest node
   magnetSpeedGate: number // rad/s; above this the magnet fades to zero
   magnetMaxPull: number   // hard cap on magnet angular accel
@@ -301,7 +302,6 @@ export const NCONF: NeuralConfig = {
     tieBandPx:       10,
     highlightSwell:   1.6,
     ringOpacity:      0.9,
-    pitchClampFree:   1.65,
     magnetStrength:   3.2,
     magnetSpeedGate:  1.4,
     magnetMaxPull:    0.35,

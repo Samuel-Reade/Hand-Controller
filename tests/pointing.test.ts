@@ -39,7 +39,7 @@ function* rotations(n: number): Generator<[number, number]> {
     return s / 4294967296
   }
   for (let i = 0; i < n; i++) {
-    yield [rnd() * Math.PI * 2, (rnd() - 0.5) * 2 * NCONF.point.pitchClampFree]
+    yield [rnd() * Math.PI * 2, (rnd() - 0.5) * 2 * Math.PI]
   }
 }
 

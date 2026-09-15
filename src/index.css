@@ -221,6 +221,47 @@ body {
   color: rgb(201 162 39 / 0.6);
 }
 
+/* --- tuning panel: gear toggle, top right --------------------------------- */
+
+.feel-gear {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 1001; /* leva's root is fixed at z 1000 */
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: none;
+  border: 1px solid rgb(42 58 92 / 0.9);
+  color: rgb(234 230 218 / 0.5);
+  cursor: pointer;
+}
+
+.feel-gear:hover,
+.feel-gear[aria-expanded='true'] {
+  color: var(--ivory);
+  border-color: var(--graticule);
+}
+
+.feel-gear svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+/* Leva's panel is fixed at 10px/10px; hang it under the gear. Leva already
+   scrolls its folder list inside a wrapper capped at
+   calc(100vh - 20px - titleBar); the 40 px the panel moved down comes off
+   that cap so the bottom edge stays where leva put it. */
+.feel-leva > div {
+  top: 50px;
+}
+.feel-leva > div > div:last-child {
+  max-height: calc(100vh - 60px - 39px);
+}
+
 /* --- telemetry ----------------------------------------------------------- */
 
 .telemetry {
