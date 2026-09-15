@@ -12,8 +12,18 @@ export interface SyntheticFaceParams {
   yaw?: number      // deg, +right (the user's right)
   pitch?: number    // deg, +up
   roll?: number     // deg
-  irisX?: number    // -1..1, +right
+  irisX?: number    // -1..1, +right (both eyes, unless per-eye values are given)
   irisY?: number    // -1..1, +up
+  /** per-eye geometric iris (a recording's eyeLX.. values); default = irisX/irisY */
+  irisLX?: number
+  irisLY?: number
+  irisRX?: number
+  irisRY?: number
+  /** per-eye blendshape estimate (a recording's blendLX.. values); default = the geometry */
+  blendLX?: number
+  blendLY?: number
+  blendRX?: number
+  blendRY?: number
   blinkL?: number   // 0..1
   blinkR?: number
   presence?: number
@@ -81,7 +91,7 @@ export function syntheticFace(p: SyntheticFaceParams, t = 0): FaceFrame {
   // the eye extends inward from it by CORNER_SPAN.
   const eye = (
     outer: number, inner: number, upper: number, lower: number, iris: number,
-    ox: number, dirInner: 1 | -1, blink: number,
+    ox: number, dirInner: 1 | -1, blink: number, ix: number, iy: number,
   ) => {
     const half = CORNER_SPAN / 2
     const cx = ox + dirInner * half
@@ -92,10 +102,10 @@ export function syntheticFace(p: SyntheticFaceParams, t = 0): FaceFrame {
     set(lower, cx, EYE_MID.y + gap / 2)
     // irisOffset: x_user = mirror((c.x - mid.x) / (0.5 span)) -> c.x = mid.x - irisX·half
     // y_user = (lidMid.y - c.y) / (0.5 gap) -> c.y = lidMid.y - irisY·gap/2
-    set(iris, cx - irisX * half, EYE_MID.y - irisY * (gap / 2))
+    set(iris, cx - ix * half, EYE_MID.y - iy * (gap / 2))
   }
-  eye(LM.leftOuter, LM.leftInner, LM.leftUpper, LM.leftLower, LM.leftIris, lx, 1, blinkL)
-  eye(LM.rightOuter, LM.rightInner, LM.rightUpper, LM.rightLower, LM.rightIris, rx, -1, blinkR)
+  eye(LM.leftOuter, LM.leftInner, LM.leftUpper, LM.leftLower, LM.leftIris, lx, 1, blinkL, p.irisLX ?? irisX, p.irisLY ?? irisY)
+  eye(LM.rightOuter, LM.rightInner, LM.rightUpper, LM.rightLower, LM.rightIris, rx, -1, blinkR, p.irisRX ?? irisX, p.irisRY ?? irisY)
 
   // Roll about the eye-line centre.
   if (roll !== 0) {
@@ -121,22 +131,26 @@ export function syntheticFace(p: SyntheticFaceParams, t = 0): FaceFrame {
     }
   }
 
-  // Blendshapes: agree with the geometry unless noisy.
+  // Blendshapes: agree with the geometry unless noisy, or given per eye.
   const bx = p.noisyBlend ? -irisX : irisX
   const by = p.noisyBlend ? -irisY : irisY
+  const bLX = p.blendLX ?? bx
+  const bLY = p.blendLY ?? by
+  const bRX = p.blendRX ?? bx
+  const bRY = p.blendRY ?? by
   const blendshapes: Record<string, number> = {
     eyeBlinkLeft: blinkL,
     eyeBlinkRight: blinkR,
     // left eye: "in" = toward the nose = the subject's right (+x)
-    eyeLookInLeft: Math.max(0, bx),
-    eyeLookOutLeft: Math.max(0, -bx),
+    eyeLookInLeft: Math.max(0, bLX),
+    eyeLookOutLeft: Math.max(0, -bLX),
     // right eye: "in" = the subject's left (-x)
-    eyeLookInRight: Math.max(0, -bx),
-    eyeLookOutRight: Math.max(0, bx),
-    eyeLookUpLeft: Math.max(0, by),
-    eyeLookUpRight: Math.max(0, by),
-    eyeLookDownLeft: Math.max(0, -by),
-    eyeLookDownRight: Math.max(0, -by),
+    eyeLookInRight: Math.max(0, -bRX),
+    eyeLookOutRight: Math.max(0, bRX),
+    eyeLookUpLeft: Math.max(0, bLY),
+    eyeLookUpRight: Math.max(0, bRY),
+    eyeLookDownLeft: Math.max(0, -bLY),
+    eyeLookDownRight: Math.max(0, -bRY),
   }
 
   return { t, landmarks: pts, blendshapes, presence: p.presence ?? 1 }

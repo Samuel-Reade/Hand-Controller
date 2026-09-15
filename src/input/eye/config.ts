@@ -18,7 +18,8 @@ export interface EyeConfig {
   detectEveryNFrames: number // 1 = camera rate (30 fps); 2 if the fps gate fails
   confidenceMin: number
   blinkThreshold: number     // eyeBlinkLeft/Right blendshape: the eye counts as shut
-  blinkIrisThreshold: number // lower: the iris is rejected this early on the way down (the lid is already moving)
+  blinkIrisThreshold: number // floor for iris rejection; the live threshold is the user's open-eye baseline + blinkMargin
+  blinkMargin: number        // iris rejected when eyeBlink exceeds this user's open-eye baseline by this much
   postBlinkFrames: number    // frames after a blink ends whose iris is rejected (the iris "snaps" on reopen)
   foreshortening: boolean    // scale the geometric iris offset by cos(head yaw / pitch)
   vergenceMax: number        // L/R iris disagreement above this drops the eye farther from the blendshapes
@@ -47,6 +48,7 @@ export interface EyeConfig {
   blinkFreeze: boolean       // hold the features while both eyes are shut (a blink cannot yank the point)
   // learning from confirms: every Enter on a gazed node is a verified sample
   learnFromConfirms: boolean
+  learnFromClicks: boolean   // a mouse/touch tap on a node is a verified sample too (the user looks where they click)
   learnMaxSamples: number    // confirm samples kept (newest), on top of the explicit run's
   learnMinSamples: number    // without an explicit run, confirms needed before a learned map is used
   learnOutlierPx: number     // a confirm this far from the fitted map is dropped
@@ -56,9 +58,12 @@ export interface EyeConfig {
   // filter (degrees / normalised domain)
   minCutoffHz: number        // the IRIS features' One Euro min cutoff (noisy)
   headMinCutoffHz: number    // the HEAD features' (steady - can be faster)
-  beta: number
+  beta: number               // the HEAD features' speed term (degrees/s)
+  irisBeta: number           // the IRIS and blendshape features' speed term (normalised units/s - ~100x the head's for the same effect)
   dCutoffHz: number
   medianPrefilter: boolean   // median-of-3 on every raw feature before the One Euro
+  medianMaxDtMs: number      // ...only while frames arrive faster than this (at 10 Hz a 3-frame median is 300 ms of lag)
+  handEveryNWhileEye: number // with the eye channel on and no hand in view, run the hand model every Nth frame (frees the face model)
   // speed-gated freeze on the mapped point
   freezeEnabled: boolean
   freezeBelowPxPerSec: number  // hold the point once slower than this...
@@ -85,6 +90,12 @@ export interface EyeConfig {
 
   // calibration (E4)
   calNinePoints: boolean     // 9 targets instead of 5: slower, steadier on a noisy camera
+  calHeadTurn: boolean       // a final stage: eyes on the centre ring while the head turns - separates head gain from eye gain (off: the product is eyes only, head still)
+  calHeadTurnMs: number
+  // saccade drill (dev): a ring steps centre, left, right, centre, up, down - each shown this long - while
+  // the recorder runs with the ring as ground truth, so the replay can say whether a saccade falls short
+  // (response < 1) or overshoots (> 1) on THIS user's map
+  drillStepMs: number
   calPointHoldMs: number
   calSampleWindowMs: number
   calInset: number
@@ -102,7 +113,11 @@ export const EYE_DEFAULTS: EyeConfig = {
   detectEveryNFrames: 2,
   confidenceMin: 0.35,
   blinkThreshold: 0.5,
+  // Real data (2026-09-15): this user's OPEN-eye blink value sits at 0.2-0.25
+  // with a real blink at 0.7; a fixed 0.3 froze the pointer for seconds.
+  // The live threshold is baseline + margin, never below the floor.
   blinkIrisThreshold: 0.3,
+  blinkMargin: 0.2,
   postBlinkFrames: 1,
   foreshortening: true,
   vergenceMax: 0.3,
@@ -126,10 +141,15 @@ export const EYE_DEFAULTS: EyeConfig = {
   pointReleaseFactor: 1.6,
   pointDwellMs: 0,
   fixationMs: 250,
-  fixationMaxMs: 500,
+  fixationMaxMs: 800, // at 10 Hz (a real machine) 800 ms is only 8 frames; the dispersion rule still resets on a saccade
   fixationRadiusPx: 90, // above the 1-2° (40-80 px) per-frame jitter, so a stare does not fragment
   blinkFreeze: true,
   learnFromConfirms: true,
+  // On (2026-09-14): Enter can only confirm the RINGED node, so a gaze
+  // confirm with the ring one node too high teaches the map that wrong
+  // node. A click is the node the user meant - the only truth that can
+  // pull a biased map back. Per user, per sitting, and only when they click.
+  learnFromClicks: true,
   learnMaxSamples: 30,
   learnMinSamples: 6,
   learnOutlierPx: 70,
@@ -142,8 +162,18 @@ export const EYE_DEFAULTS: EyeConfig = {
   minCutoffHz: 0.7,
   headMinCutoffHz: 1.5,
   beta: 0.015,
+  // 4 (drill clip, 2026-09-14): the iris features are normalised units
+  // (a full saccade is ~3 units/s), so the head's 0.015 never opened the
+  // cutoff - the iris was a fixed 0.7 Hz low-pass with a 680 ms settle,
+  // which is exactly the "falls short" the user felt, and it biased the
+  // calibration's sample window 10-15 % low. Sweep: 0.015 -> 4 takes the
+  // drill's saccade response 0.80 -> 0.97 and settle 689 -> 526 ms (the
+  // rest is reaction time); rest jitter unchanged.
+  irisBeta: 4,
   dCutoffHz: 1.0,
   medianPrefilter: true,
+  medianMaxDtMs: 60,
+  handEveryNWhileEye: 3,
   freezeEnabled: true,
   freezeBelowPxPerSec: 60,   // ~1.5° per second
   freezeAfterMs: 100,
@@ -167,6 +197,13 @@ export const EYE_DEFAULTS: EyeConfig = {
   // be trusted and for a curvature correction to be validated, and coverage
   // of the region the nodes actually occupy (a map extrapolates badly).
   calNinePoints: true,
+  // Off (user direction 2026-09-14): the product is eyes only with the head
+  // still. With the head still the stage adds 24 samples a linear map
+  // cannot fit (residual 66 -> 120 px on the first live run) and buys
+  // nothing. The slider stays for a head-moving demo.
+  calHeadTurn: false,
+  calHeadTurnMs: 6000,
+  drillStepMs: 2000,
   calPointHoldMs: 1600,
   calSampleWindowMs: 1000,
   calInset: 0.65,

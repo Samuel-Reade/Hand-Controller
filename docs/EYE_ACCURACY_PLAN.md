@@ -1,8 +1,11 @@
 # Eye look-selector: accuracy plan (2026-09-13)
 
-**Status 2026-09-13:** phases 1-5 built (uncommitted) except the eyeball-centre model
-(gated on the head-turn recording) and the data-driven retune (needs the recordings). See
-DECISIONS.md "Eye accuracy plan, phases 1-5 built" for the numbers and findings.
+**Status 2026-09-14:** phases 1-5 built and committed, plus the real-recording fixes, the
+saccade DRILL (truth + the user's map in every clip), `irisBeta` (the phase 3.4 retune, from the
+drill: response 0.80 -> 0.97) and click learning. Not built: the eyeball-centre model (the
+product is eyes only, head still - DECISIONS "Eyes only, head still") and the pupil finder
+(gated on the ten-node gate with click learning). The open problem is the VERTICAL signal:
+the eyeLookDown blendshape drifts ~60 px on the user's face; see DECISIONS "Second drill".
 
 Goal: the violet ring lands on the node you are looking at, first time, and stays still while
 you hold your gaze. Judged by numbers from recordings and by confirm residuals, then by the human

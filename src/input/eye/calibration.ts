@@ -334,6 +334,22 @@ export interface OnlineCalibration {
   rejected: number
 }
 
+/** Where a learned sample came from: Enter/pinch on the ringed node, or a positioned click on a node. */
+export type LearnSource = 'gaze' | 'click'
+
+/**
+ * May this moment's features be learned from? The flag for the source, a
+ * face, and NOT head-only (the iris zeroed would teach a head-only map).
+ */
+export function learnAllowed(
+  cfg: Pick<EyeConfig, 'learnFromConfirms' | 'learnFromClicks'>,
+  t: { facePresent: boolean; headOnly: boolean },
+  source: LearnSource,
+): boolean {
+  const flag = source === 'click' ? cfg.learnFromClicks : cfg.learnFromConfirms
+  return flag && t.facePresent && !t.headOnly
+}
+
 export function createOnlineCalibration(): OnlineCalibration {
   return { base: [], learned: [], cal: null, rejected: 0 }
 }

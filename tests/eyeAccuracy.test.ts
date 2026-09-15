@@ -10,8 +10,8 @@ import { createEyeChannel } from '../src/input/eye/channel'
 import type { EyeContext } from '../src/input/eye/channel'
 import { EYE_DEFAULTS } from '../src/input/eye/config'
 import type { EyeConfig } from '../src/input/eye/config'
-import { LM, blendshapeGaze, headPose, irisOffset, screenPointFrom } from '../src/input/eye/face'
-import type { FaceFrame, GazeFeatures } from '../src/input/eye/face'
+import { LM, blendshapeGaze, headPose, irisOffset, screenPointDefault, screenPointFrom } from '../src/input/eye/face'
+import type { Calibration, FaceFrame, GazeFeatures } from '../src/input/eye/face'
 import { formatMetrics, replayRecording } from '../src/input/eye/replay'
 import type { EyeRecording } from '../src/input/eye/replay'
 import { createGazeFocus, stepGazeFocus } from '../src/neural/gazeFocus'
@@ -104,8 +104,8 @@ describe('phase 3: steadiness', () => {
     expect(without).toBeGreaterThan(2)
   })
 
-  it('2.4 the head is followed faster than the iris (separate cutoffs)', () => {
-    const c = point({ freezeEnabled: false, medianPrefilter: false, beta: 0 })
+  it('2.4 the head is followed faster than the iris (separate cutoffs, both speed terms off)', () => {
+    const c = point({ irisBeta: EYE_DEFAULTS.beta,  freezeEnabled: false, medianPrefilter: false, beta: 0 })
     const settle = (script: (t: number) => FaceFrame, read: (f: GazeFeatures) => number, target: number) => {
       const ch = createEyeChannel(c)
       for (let t = 0; t < 1000; t += FRAME) ch.process(script(t), t, ctx())
@@ -263,5 +263,145 @@ describe('phase 1: the replay harness on synthetic recordings', () => {
     expect(m.saccadeResponse).toBeGreaterThan(0.85)
     expect(m.saccadeSettleMs).toBeLessThan(300)
     expect(m.truthErrorPx).toBeLessThan(120) // the transitions count against it
+  })
+})
+
+// ── the saccade drill (2026-09-14): truth + the user's own map in the clip ─────
+describe('saccade drill: the replay runs the recorded map and reports each step', () => {
+  /** A base-model map with the head gain scaled by `gain` (1 = the default map's head term). */
+  const headMap = (c: EyeConfig, gain: number): Calibration => ({
+    model: 'base',
+    x: [VIEW.w / 2, gain * c.pxPerDeg, 0, 0],
+    y: [VIEW.h / 2, -gain * c.pxPerDeg, 0, 0],
+    residualPx: 0,
+    points: 9,
+  })
+  /** The drill's clip: centre, left, right, centre, up, down - the eyes exactly on each ring. */
+  const drillClip = (c: EyeConfig, cal: Calibration | null): EyeRecording => {
+    const rec: EyeRecording = { frames: [], viewport: VIEW, label: 'drill', truth: [], calibration: cal }
+    const dx = (VIEW.w / 2) * c.calInset
+    const dy = (VIEW.h / 2) * c.calInset
+    const ring = [[720, 450], [720 - dx, 450], [720 + dx, 450], [720, 450], [720, 450 - dy], [720, 450 + dy]]
+    let t = 0
+    for (const [x, y] of ring) {
+      rec.truth!.push({ t, x, y })
+      for (let i = 0; i < 60; i++, t += FRAME) {
+        const f = syntheticFace({ yaw: (x - 720) / c.pxPerDeg, pitch: (450 - y) / c.pxPerDeg })
+        const head = headPose(f, c)
+        const blend = blendshapeGaze(f.blendshapes)
+        const iris = irisOffset(f, c, head, blend)
+        rec.frames.push({ t, raw: { headYaw: head.yaw, headPitch: head.pitch, irisX: iris.x, irisY: iris.y, blendX: blend.x, blendY: blend.y, eyeLX: iris.L.x, eyeLY: iris.L.y, eyeRX: iris.R.x, eyeRY: iris.R.y, blendLX: blend.L.x, blendLY: blend.L.y, blendRX: blend.R.x, blendRY: blend.R.y, ok: true }, blinkL: 0, blinkR: 0, okL: true, okR: true, confidence: 1, headOk: true })
+      }
+    }
+    return rec
+  }
+  it('a map that falls short reads under 1 on every step; one that overshoots reads over 1', () => {
+    const c = point()
+    const short = replayRecording(drillClip(c, headMap(c, 0.5)), c)
+    expect(short.saccadeSteps).toHaveLength(5)
+    for (const r of short.saccadeSteps) expect(r).toBeGreaterThan(0.35)
+    for (const r of short.saccadeSteps) expect(r).toBeLessThan(0.65)
+    const over = replayRecording(drillClip(c, headMap(c, 1.5)), c)
+    for (const r of over.saccadeSteps) expect(r).toBeGreaterThan(1.3)
+    expect(formatMetrics(over)).toContain('[')
+  })
+  it('without a recorded map the replay falls back to the default map', () => {
+    const c = point()
+    const m = replayRecording(drillClip(c, null), c)
+    expect(m.saccadeResponse).toBeGreaterThan(0.85)
+    expect(m.saccadeResponse).toBeLessThan(1.15)
+  })
+})
+
+// ── the drill's verdict (2026-09-14): the iris filter's speed term ──────────
+describe('iris beta: the One Euro opens up on a saccade measured in iris units', () => {
+  const F15 = 1000 / 15
+  const rawOf = (f: FaceFrame, c: EyeConfig): GazeFeatures => {
+    const head = headPose(f, c)
+    const blend = blendshapeGaze(f.blendshapes)
+    const iris = irisOffset(f, c, head, blend)
+    return { headYaw: head.yaw, headPitch: head.pitch, irisX: iris.x, irisY: iris.y, blendX: blend.x, blendY: blend.y, eyeLX: iris.L.x, eyeLY: iris.L.y, eyeRX: iris.R.x, eyeRY: iris.R.y, blendLX: blend.L.x, blendLY: blend.L.y, blendRX: blend.R.x, blendRY: blend.R.y, ok: true }
+  }
+  const push = (rec: EyeRecording, t: number, raw: GazeFeatures) =>
+    rec.frames.push({ t, raw, blinkL: 0, blinkR: 0, okL: true, okR: true, confidence: 1, headOk: true })
+  /** Three fixations at 15 Hz with instant IRIS steps between them (the head still); truth = the default map at each. */
+  const irisSteps = (c: EyeConfig): EyeRecording => {
+    const rec: EyeRecording = { frames: [], viewport: VIEW, label: 'iris-steps', truth: [] }
+    let t = 0
+    for (const irisX of [0, 0.4, -0.4]) {
+      const raw = rawOf(syntheticFace({ irisX }), c)
+      const p = screenPointDefault(raw, c, VIEW)
+      rec.truth!.push({ t, x: p.x, y: p.y })
+      for (let i = 0; i < 30; i++, t += F15) push(rec, t, raw)
+    }
+    return rec
+  }
+  /** One fixation at 15 Hz with iris noise. */
+  const irisRest = (c: EyeConfig): EyeRecording => {
+    let seed = 11
+    const rnd = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296 - 0.5 }
+    const rec: EyeRecording = { frames: [], viewport: VIEW, label: 'iris-rest' }
+    for (let i = 0; i < 150; i++) push(rec, i * F15, rawOf(syntheticFace({ irisX: 0.1 + rnd() * 0.04, irisY: rnd() * 0.04 }), c))
+    return rec
+  }
+  it('settles a saccade in a few frames instead of most of a second, and leaves rest jitter alone', () => {
+    const slow = point({ irisBeta: 0.015 })
+    const fast = point({ irisBeta: 4 })
+    const s = replayRecording(irisSteps(slow), slow)
+    const q = replayRecording(irisSteps(fast), fast)
+    expect(s.saccadeSettleMs).toBeGreaterThan(300)
+    expect(q.saccadeSettleMs).toBeLessThan(200)
+    expect(q.saccadeResponse).toBeGreaterThan(0.95)
+    const rs = replayRecording(irisRest(slow), slow)
+    const rq = replayRecording(irisRest(fast), fast)
+    expect(rq.restJitterPx).toBeLessThan(rs.restJitterPx * 1.25 + 1)
+  })
+})
+
+// ── from the first real recordings (2026-09-15) ────────────────────────────
+
+describe('real-data fixes: blink baseline, history vergence, rate-aware median', () => {
+  const FRAME10 = 100
+  it('the iris threshold adapts to a user whose open-eye blink value sits at 0.25', () => {
+    const c = point()
+    const ch = createEyeChannel(c)
+    // open eyes reading 0.25 (this user), a real blink at 0.7 at 3 s
+    for (let t = 0; t < 4000; t += FRAME10) {
+      const blink = t >= 3000 && t < 3200 ? 0.7 : 0.25
+      ch.process(syntheticFace({ irisX: 0.2, blinkL: blink, blinkR: blink }), t, ctx())
+      if (t > 1000 && t < 3000) {
+        expect(ch.telemetry.irisOkL && ch.telemetry.irisOkR).toBe(true) // 0.25 is OPEN for this user
+        expect(ch.telemetry.blinkThresholdL).toBeGreaterThan(0.4)
+      }
+      if (t >= 3000 && t < 3200) expect(ch.telemetry.irisOkL || ch.telemetry.irisOkR).toBe(false) // 0.7 is a blink
+    }
+    expect(ch.telemetry.okRateL).toBeGreaterThan(0.7)
+  })
+
+  it('a constant offset between the eyes never trips the vergence check; a one-eye jump does', () => {
+    const c = point()
+    const ch = createEyeChannel(c)
+    // this user's eyes: L reads +0.12 above R, always
+    let drops = 0
+    for (let t = 0; t < 6000; t += FRAME10) {
+      const gx = 0.2 * Math.sin(t / 1500)
+      const jump = t >= 4000 && t < 4300 ? 0.5 : 0 // the left eye mis-tracks for three frames
+      ch.process(syntheticFace({ irisLX: gx + 0.12 + jump, irisRX: gx - 0.12, blendLX: gx, blendRX: gx }), t, ctx())
+      if (t < 4000 && t > 1000) expect(ch.telemetry.vergenceDrop).toBeNull()
+      if (ch.telemetry.vergenceDrop) drops++
+      if (t >= 4000 && t < 4300) expect(ch.telemetry.vergenceDrop).toBe('L')
+    }
+    expect(drops).toBeGreaterThanOrEqual(3)
+    expect(drops).toBeLessThanOrEqual(5)
+  })
+
+  it('the median pre-filter stands down at 10 Hz', () => {
+    const c = point()
+    const ch = createEyeChannel(c)
+    for (let t = 0; t < 1000; t += FRAME10) ch.process(syntheticFace({}), t, ctx())
+    expect(ch.telemetry.medianActive).toBe(false)
+    const fast = createEyeChannel(c)
+    for (let t = 0; t < 1000; t += 33) fast.process(syntheticFace({}), t, ctx())
+    expect(fast.telemetry.medianActive).toBe(true)
   })
 })

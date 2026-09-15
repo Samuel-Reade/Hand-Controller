@@ -68,7 +68,8 @@ export function EyeDebug() {
         `EYE ${e.state.toUpperCase()}${e.headOnly ? ' · HEAD ONLY' : ''}${e.frozen ? ' · FROZEN' : ''}${e.wideModel ? ' · WIDE' : ''}\n` +
         `yaw ${e.yaw.toFixed(1)}°  pitch ${e.pitch.toFixed(1)}°  norm ${e.norm.toFixed(2)}  ${e.headSource}\n` +
         `conf ${e.confidence.toFixed(2)}  iris ok L ${(e.okRateL * 100).toFixed(0)}% R ${(e.okRateR * 100).toFixed(0)}%` +
-        `${e.vergenceDrop ? `  drop ${e.vergenceDrop}` : ''}  ${e.detectHz} Hz  ${e.detectMs.toFixed(1)} ms\n` +
+        `  blink thr ${e.blinkThresholdL.toFixed(2)}/${e.blinkThresholdR.toFixed(2)}${e.vergenceDrop ? `  drop ${e.vergenceDrop}` : ''}\n` +
+        `${e.detectHz} Hz  face ${e.detectMs.toFixed(0)} ms ${e.delegate}  hand ${e.handDetectMs.toFixed(0)} ms ${e.handDelegate}${e.medianActive ? '' : '  median off'}\n` +
         `cal ${e.calibratedPoints ? `${e.calibratedPoints} pts ${e.calibrationResidualPx.toFixed(0)} px` : 'default map'}` +
         `  eyes vs head ${Math.hypot(e.gazeX - e.headX, e.gazeY - e.headY).toFixed(0)} px`
     }

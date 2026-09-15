@@ -907,3 +907,74 @@ Decisions: docs/DECISIONS.md ("Eye accuracy plan, phases 1-5 built").
   verify-eye 11/11, verify-centering 13/13. Shot: shots/eye-diagnostics.png.
 - Synthetic replay (rest clip, 1.5° jitter): filtered rms 6.4 -> 0.3 px,
   frozen 99 %; saccade clip: response 1.00 -> 0.96, settle 117 -> 125 ms.
+
+# First real recordings + fixes (2026-09-15)
+
+Decisions: docs/DECISIONS.md ("First real recordings").
+- recordings/{rest,horizontal,vertical,head}.json (10 Hz, ~100 frames each).
+  tests/eyeRecordings.test.ts replays them.
+- `eye/face.ts`: eyeOffsets (per-eye thresholds) + combineEyes (drop decided
+  by the caller); irisOffset kept as the stateless convenience.
+  `eye/channel.ts`: adaptive blink baselines, history-aware vergence,
+  rate-aware median, EyeRecordFrame.geom, telemetry (thresholds, median
+  state, delegates, hand ms). `useHandInput`: hand every Nth frame while
+  the eye is on and no hand is seen; hand ms + delegate. `EyeCalibration`:
+  head-turn stage. `__synthetic__/face.ts`: per-eye iris + blendshape
+  params. `eye/replay.ts`: per-eye replay, old-clip handling. Config:
+  blinkMargin, medianMaxDtMs, handEveryNWhileEye, calHeadTurn(Ms);
+  fixationMaxMs 800.
+- Tests 244 (+3). verify-eye 11/11, verify-centering 13/13.
+
+# Eyes only + saccade drill (2026-09-14)
+
+Decisions: docs/DECISIONS.md ("Eyes only, head still; the saccade drill").
+- `eye/config.ts`: `calHeadTurn` false by default; `drillStepMs`.
+  `eye/replay.ts`: `EyeRecording.calibration` (the replay runs it),
+  `ReplayMetrics.saccadeSteps`, printed by formatMetrics. `useEyeInput.ts`:
+  every recording carries `eyeChannel.calibration`; `window.__eyeDrill`
+  (six ring positions at calInset, a `truth` entry per step, store
+  `eyeDrill`). `store.ts`: `eyeDrill` / `setEyeDrill`. `EyeCalibration`:
+  renders the drill ring. `CameraConsent`: DRILL button. `EyeControls`:
+  drill button + `drillStepMs` slider.
+- Tests 246 (+2: per-step response on a short / an overshooting map;
+  default-map fallback without a recorded map). tsc + oxlint clean.
+  Gates NOT run (the user's machine).
+- First live overlay: 16 Hz, face 15 ms GPU, hand 9 ms GPU, cal 33 pts
+  120 px, eyes vs head 450 px.
+
+# Drill verdict: irisBeta (2026-09-14)
+
+Decisions: docs/DECISIONS.md ("The drill's verdict").
+- recordings/drill.json (155 frames, 15 Hz, calibration + truth in the
+  clip). `eye/config.ts`: `irisBeta` (4). `eye/channel.ts`: the iris /
+  blendshape filters take `irisBeta`. `eye/replay.ts`: optional
+  per-frame `trace` on replayRecording. `EyeControls`: `irisBeta` slider.
+- Tests 248 (+1: iris steps at 15 Hz settle < 200 ms with irisBeta 4,
+  > 300 ms with 0.015, rest jitter within 25 %). tsc + oxlint clean.
+  Gates NOT run (the user's machine).
+- Drill on the user's map: response 0.80 -> 0.97, settle 689 -> 526 ms.
+
+# Second drill: calibration samples in recordings (2026-09-14)
+
+Decisions: docs/DECISIONS.md ("Second drill: it selects too high").
+- `eye/replay.ts`: `EyeRecording.calSamples`. `useEyeInput.ts`: every
+  recording carries `eyeOnline.state.base`. `tests/eyeRecordings.test.ts`
+  prints, per drill ring, calibration-time vs clip features. 248 tests,
+  tsc + oxlint clean. Gates NOT run.
+- Finding: only the unpositioned gaze confirm feeds `eyeLearn`
+  (NeuralScene.tsx); a mouse click on a node does not. So the learner
+  can only reinforce the ring's own choice.
+
+# Click learning (2026-09-14)
+
+Decisions: docs/DECISIONS.md ("Click learning").
+- `eye/config.ts`: `learnFromClicks`. `eye/calibration.ts`: `LearnSource`,
+  `learnAllowed`. `useEyeInput.ts`: `eyeLearn(x, y, source)` gated by
+  `learnAllowed`; the DEV console line names the source.
+  `neural/NeuralScene.tsx`: `click(x, y, learn)`; the positioned tap
+  passes `learn = true`; a node hit learns from `hit.x/y` (projected
+  centre, px from screen centre) + half the viewport. `EyeControls`:
+  `learnFromClicks` toggle.
+- Tests 250 (+2 in tests/eye.test.ts). tsc + oxlint clean. Gates NOT run
+  (the point-select gate in verify-eye still covers the gaze path; the
+  click path has no gate yet).

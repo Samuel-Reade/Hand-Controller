@@ -22,11 +22,12 @@ import type { EyeConfig } from './config'
 import {
   FEATURE_KEYS,
   blendshapeGaze,
+  combineEyes,
   confidence as confidenceOf,
+  eyeOffsets,
   gazeFeatures,
   headPose,
   irisAgreementScale,
-  irisOffset,
   screenPointFrom,
 } from './face'
 import type { Calibration, FaceFrame, FeatureKey, GazeFeatures } from './face'
@@ -95,12 +96,24 @@ export interface EyeTelemetry {
   /** frames in the current fixation (1 = a fresh saccade) and its window */
   fixationN: number
   fixationWindowMs: number
+  /** the live per-eye blink thresholds (open-eye baseline + margin) */
+  blinkThresholdL: number
+  blinkThresholdR: number
+  /** the median pre-filter is active (frames arrive fast enough) */
+  medianActive: boolean
+  /** which delegate the face model got, and the hand model's cost - set by the shells */
+  delegate: 'GPU' | 'CPU' | '-'
+  handDetectMs: number
+  handDelegate: 'GPU' | 'CPU' | '-'
 }
 
 /** One raw frame for the dev recorder (ideas §1.6) - what a replay needs. */
 export interface EyeRecordFrame {
   t: number
+  /** the features as the channel used them (an eye not ok carries its blendshape fallback) */
   raw: GazeFeatures
+  /** the PURE geometric per-eye offsets, ok or not - the first clips lacked these and replayed wrong */
+  geom?: { LX: number; LY: number; RX: number; RY: number }
   blinkL: number
   blinkR: number
   okL: boolean
@@ -122,6 +135,8 @@ export function createEyeTelemetry(): EyeTelemetry {
     rawX: 0, rawY: 0, headX: 0, headY: 0,
     okRateL: 0, okRateR: 0, vergenceDrop: null, frozen: false, detectHz: 0, wideModel: false,
     fixationN: 0, fixationWindowMs: 0,
+    blinkThresholdL: 0.3, blinkThresholdR: 0.3, medianActive: true,
+    delegate: '-', handDetectMs: 0, handDelegate: '-',
   }
 }
 
@@ -218,6 +233,13 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
   let heldPt: { x: number; y: number } | null = null
   /** detection rate */
   const detectTimes: number[] = []
+  /** per-eye open-eye blink baselines (EMA over frames with the eye plainly open) */
+  let baseL: number | null = null
+  let baseR: number | null = null
+  /** the eyes' constant offset from each other (EMA of L - R while both ok); vergence = a CHANGE in it */
+  let diffEma: { x: number; y: number } | null = null
+  let prevEyes: { L: { x: number; y: number }; R: { x: number; y: number } } | null = null
+  let lastFrameT: number | null = null
 
   const setState = (s: EyeState) => {
     state = s
@@ -255,6 +277,11 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
     lastPt = null
     heldPt = null
     fixation = createFixation()
+    baseL = null
+    baseR = null
+    diffEma = null
+    prevEyes = null
+    lastFrameT = null
     setState('off')
   }
 
@@ -321,9 +348,51 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
         detectTimes.push(nowMs)
         while (detectTimes.length && detectTimes[0] < nowMs - 1000) detectTimes.shift()
         telemetry.detectHz = detectTimes.length
+        const frameDt = lastFrameT !== null ? nowMs - lastFrameT : 1000 / 30
+        lastFrameT = nowMs
         const head = headPose(frame, cfg)
         const blend = blendshapeGaze(frame.blendshapes)
-        const iris = irisOffset(frame, cfg, head, blend)
+        // Adaptive blink thresholds: this user's open-eye eyeBlink value is
+        // their baseline (EMA over frames plainly open, tau ~3 s); the iris
+        // is rejected above baseline + blinkMargin, never below the floor.
+        const bL = frame.blendshapes.eyeBlinkLeft ?? 0
+        const bR = frame.blendshapes.eyeBlinkRight ?? 0
+        const a = Math.min(1, frameDt / 3000)
+        if (bL < cfg.blinkThreshold) baseL = baseL === null ? bL : baseL + a * (bL - baseL)
+        if (bR < cfg.blinkThreshold) baseR = baseR === null ? bR : baseR + a * (bR - baseR)
+        const thresholds = {
+          L: Math.max(cfg.blinkIrisThreshold, (baseL ?? 0) + cfg.blinkMargin),
+          R: Math.max(cfg.blinkIrisThreshold, (baseR ?? 0) + cfg.blinkMargin),
+        }
+        telemetry.blinkThresholdL = thresholds.L
+        telemetry.blinkThresholdR = thresholds.R
+        const eyes = eyeOffsets(frame, cfg, head, thresholds)
+        // Vergence with history: the eyes' offset from each other is
+        // constant on a real face; a jump in (L - R) means one eye
+        // mis-tracked - drop the one that moved more since the last frame.
+        let drop: 'L' | 'R' | null = null
+        if (eyes.L.ok && eyes.R.ok) {
+          const d = { x: eyes.L.x - eyes.R.x, y: eyes.L.y - eyes.R.y }
+          if (diffEma) {
+            const anomaly = Math.hypot(d.x - diffEma.x, d.y - diffEma.y)
+            if (anomaly > cfg.vergenceMax && prevEyes) {
+              const mL = Math.hypot(eyes.L.x - prevEyes.L.x, eyes.L.y - prevEyes.L.y)
+              const mR = Math.hypot(eyes.R.x - prevEyes.R.x, eyes.R.y - prevEyes.R.y)
+              drop = mL > mR ? 'L' : 'R'
+            }
+          }
+          if (!drop) {
+            const b5 = Math.min(1, frameDt / 5000)
+            diffEma = diffEma ? { x: diffEma.x + b5 * (d.x - diffEma.x), y: diffEma.y + b5 * (d.y - diffEma.y) } : d
+          }
+          // the reference advances only for an ACCEPTED eye: a mis-tracking
+          // eye stays measured against its last good value until it returns
+          prevEyes = {
+            L: drop === 'L' && prevEyes ? prevEyes.L : { x: eyes.L.x, y: eyes.L.y },
+            R: drop === 'R' && prevEyes ? prevEyes.R : { x: eyes.R.x, y: eyes.R.y },
+          }
+        }
+        const iris = combineEyes(eyes.L, eyes.R, cfg, drop)
         okHistory.push({ t: nowMs, okL: iris.okL ? 1 : 0, okR: iris.okR ? 1 : 0 })
         while (okHistory.length && okHistory[0].t < nowMs - 1000) okHistory.shift()
         const okRateL = okHistory.reduce((a, h) => a + h.okL, 0) / Math.max(1, okHistory.length)
@@ -345,20 +414,25 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
         if (!hold) lastRaw = raw
         conf = confidenceOf(frame, head, iris)
         channel.record?.({
-          t: nowMs, raw, blinkL: frame.blendshapes.eyeBlinkLeft ?? 0, blinkR: frame.blendshapes.eyeBlinkRight ?? 0,
-          okL: iris.okL, okR: iris.okR, confidence: conf, headOk: head.ok,
+          t: nowMs, raw, geom: { LX: eyes.L.x, LY: eyes.L.y, RX: eyes.R.x, RY: eyes.R.y },
+          blinkL: bL, blinkR: bR, okL: iris.okL, okR: iris.okR, confidence: conf, headOk: head.ok,
         })
         if (!facePresent) resetFilters()
         const tS = nowMs / 1000
         const headParams = { minCutoff: cfg.headMinCutoffHz, beta: cfg.beta, dCutoff: cfg.dCutoffHz }
-        const irisParams = { minCutoff: cfg.minCutoffHz, beta: cfg.beta, dCutoff: cfg.dCutoffHz }
+        const irisParams = { minCutoff: cfg.minCutoffHz, beta: cfg.irisBeta, dCutoff: cfg.dCutoffHz }
         // Filter the FEATURES, not the point: both the default map and a
         // calibration then see the same smoothed inputs. Median-of-3 first
         // (spikes), then One Euro - the head steady and quick, the iris
         // smoothed harder (ideas 2.3, 2.4).
+        // The median is worth a frame of lag at 30 Hz and 300 ms at 10 Hz
+        // (a real machine ran the two models at 10 Hz): only while frames
+        // arrive faster than medianMaxDtMs.
+        const medianOn = cfg.medianPrefilter && frameDt <= cfg.medianMaxDtMs
+        telemetry.medianActive = medianOn
         const f = { ok: raw.ok } as GazeFeatures
         for (const k of FEATURE_KEYS) {
-          const v = cfg.medianPrefilter ? medians.get(k)!.push(raw[k]) : raw[k]
+          const v = medianOn ? medians.get(k)!.push(raw[k]) : raw[k]
           const isHead = k === 'headYaw' || k === 'headPitch'
           f[k] = filters.get(k)!.filter(v, tS, isHead ? headParams : irisParams)
         }

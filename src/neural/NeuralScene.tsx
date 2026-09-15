@@ -231,6 +231,11 @@ function disposeMesh(mesh: Mesh): void {
   ;(mesh.material as ShaderMaterial).dispose()
 }
 
+// No rotational limit: the integrator's pitch clamp is Infinity here, so hand
+// and pointer drag can carry the field through the poles and around. The
+// globe scene keeps PITCH_CLAMP (data/orbits.ts) and its frozen tests.
+const NO_PITCH_CLAMP = Infinity
+
 const BEAD_DIAM = 6
 const BEAD_OPA = [1, 1, 1] as const
 // Backdrop plane depths at the REST view (world z with the camera at
@@ -363,17 +368,16 @@ interface DrillState {
 
 export function NeuralScene({ bus }: { bus: InputBus }) {
   // The frozen integrator, subscribed the way useOrbPhysics does it, but with
-  // the pitch clamp the pure core already takes as a parameter: the globe's
-  // PITCH_CLAMP is MAX_ORBIT_LATITUDE + 0.06 (~0.86 rad), a category-grid
-  // limit that leaves this field's polar clusters unreachable.
-  // ORB_SELECT_SPEC §1 LOCKED relaxes it to point.pitchClampFree for the
-  // neural scene only. Nothing in useOrbPhysics.ts changes.
+  // the pitch clamp the pure core already takes as a parameter set to
+  // Infinity: no rotational limit on either axis for hand or pointer drag
+  // (user direction 2026-09-14, docs/DECISIONS.md). The globe keeps its
+  // PITCH_CLAMP; nothing in useOrbPhysics.ts changes.
   const physics = orbRuntime.physics
   useEffect(
     () =>
       bus.on((e) => {
         orbRuntime.lastEvent = e.type
-        applyInputEvent(orbRuntime.physics, e, ORBITS, NCONF.point.pitchClampFree)
+        applyInputEvent(orbRuntime.physics, e, ORBITS, NO_PITCH_CLAMP)
       }),
     [bus],
   )
@@ -872,7 +876,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     //   - empty space -> nothing. A blind confirm at the sight is what a
     //     cursor user reads as "I clicked X and got Y".
     // Hand pinch-taps and Enter stay unpositioned and keep the sight model.
-    const click = (x: number, y: number): void => {
+    const click = (x: number, y: number, learn = false): void => {
       const view = viewRef.current
       if (!view) return
       const { yaw, pitch } = orbRuntime.physics
@@ -888,6 +892,10 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         return
       }
       const node = hit.node
+      // ORB_EYE: a POSITIONED click on a node is a verified gaze sample - the
+      // user looks where they click - and the only truth that can pull a
+      // biased map back (Enter can only confirm the ringed node).
+      if (learn) eyeLearn(hit.x + window.innerWidth / 2, hit.y + window.innerHeight / 2, 'click')
       const local = nodePosition(node)
       const already = center.current.name === node.name && center.current.k >= 1
 
@@ -940,7 +948,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       if (e.type !== 'tap' && e.type !== 'zoomCommit') return
       if (useStore.getState().openReport) return // input suspended while open
       if (e.type === 'tap' && e.x !== undefined && e.y !== undefined) {
-        click(e.x, e.y)
+        click(e.x, e.y, true)
         return
       }
       // ORB_EYE point mode: an UNPOSITIONED confirm (Enter, pinch-tap) with a
@@ -1012,7 +1020,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
 
   useFrame((state, delta) => {
     const d = drill.current
-    stepPhysics(physics, delta, FEEL, ORBITS, NCONF.point.pitchClampFree)
+    stepPhysics(physics, delta, FEEL, ORBITS, NO_PITCH_CLAMP)
     if (tiltRef.current) tiltRef.current.rotation.x = physics.pitch
     if (spinRef.current) spinRef.current.rotation.y = physics.yaw
 

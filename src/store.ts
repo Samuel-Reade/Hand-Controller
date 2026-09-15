@@ -36,6 +36,7 @@ interface AppState {
   eyeEnabled: boolean // ORB_EYE_SPEC: the gaze channel opt-in (separate from camera consent)
   eyeCalibrating: boolean // the calibration flow is on screen (gaze pointer suspended)
   eyeCalResult: string | null // last calibration outcome for the HUD ("CAL 38PX" / "CAL FAILED")
+  eyeDrill: { x: number; y: number } | null // the saccade drill's ring (dev recorder), shown while it records
   setFocus(focus: FocusRef): void
   openFocused(): void
   openNode(node: string, tier: string): void
@@ -49,6 +50,7 @@ interface AppState {
   setEyeEnabled(eyeEnabled: boolean): void
   setEyeCalibrating(eyeCalibrating: boolean): void
   setEyeCalResult(eyeCalResult: string | null): void
+  setEyeDrill(eyeDrill: { x: number; y: number } | null): void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -63,6 +65,7 @@ export const useStore = create<AppState>((set, get) => ({
   eyeEnabled: false,
   eyeCalibrating: false,
   eyeCalResult: null,
+  eyeDrill: null,
   setFocus: (focus) => set({ focus }),
   openFocused: () => {
     const { focus } = get()
@@ -76,7 +79,8 @@ export const useStore = create<AppState>((set, get) => ({
   setHandEngaged: (handEngaged) => set({ handEngaged }),
   setHandCount: (handCount) => set({ handCount }),
   setHandZoom: (handZoom) => set({ handZoom }),
-  setEyeEnabled: (eyeEnabled) => set({ eyeEnabled, ...(eyeEnabled ? {} : { eyeCalibrating: false, eyeCalResult: null }) }),
+  setEyeEnabled: (eyeEnabled) => set({ eyeEnabled, ...(eyeEnabled ? {} : { eyeCalibrating: false, eyeCalResult: null, eyeDrill: null }) }),
   setEyeCalibrating: (eyeCalibrating) => set({ eyeCalibrating }),
   setEyeCalResult: (eyeCalResult) => set({ eyeCalResult }),
+  setEyeDrill: (eyeDrill) => set({ eyeDrill }),
 }))

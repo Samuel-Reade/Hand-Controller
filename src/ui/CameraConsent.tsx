@@ -35,6 +35,33 @@ export function CameraConsent() {
   const calibrating = useStore((s) => s.eyeCalibrating)
   const setCalibrating = useStore((s) => s.setEyeCalibrating)
   const calResult = useStore((s) => s.eyeCalResult)
+  const [recording, setRecording] = useState<string | null>(null)
+  // Dev recorder (EYE_ACCURACY_PLAN phase 1): four ten-second clips; the
+  // JSON downloads and goes into recordings/. Dev only.
+  const record = async () => {
+    if (!import.meta.env.DEV || !window.__eyeRecord || recording) return
+    setRecording('RECORDING 10 S…')
+    try {
+      await window.__eyeRecord(10, 'clip')
+      setRecording('SAVED')
+    } finally {
+      setTimeout(() => setRecording(null), 1500)
+    }
+  }
+  // The saccade drill (EYE_ACCURACY_PLAN): a ring steps through six
+  // positions for drillStepMs each while the recorder runs; the ring is the
+  // clip's ground truth. Dev only.
+  const [drilling, setDrilling] = useState<string | null>(null)
+  const drill = async () => {
+    if (!import.meta.env.DEV || !window.__eyeDrill || recording || drilling) return
+    setDrilling('DRILL…')
+    try {
+      await window.__eyeDrill()
+      setDrilling('SAVED')
+    } finally {
+      setTimeout(() => setDrilling(null), 1500)
+    }
+  }
   const wide = useViewportWide()
 
   // Pointer-only below the responsive cutoff, and without getUserMedia the
@@ -84,6 +111,28 @@ export function CameraConsent() {
               title="Five targets, about eight seconds. Session only."
             >
               {calibrating ? 'CALIBRATING…' : (calResult ?? 'CALIBRATE')}
+            </button>
+          )}
+          {eyeEnabled && import.meta.env.DEV && (
+            <button
+              type="button"
+              className="hand-link hand-link-eye"
+              disabled={recording !== null}
+              onClick={() => void record()}
+              title="Ten seconds of raw gaze numbers to a JSON file (no video). Drop it into recordings/."
+            >
+              {recording ?? 'RECORD 10 S'}
+            </button>
+          )}
+          {eyeEnabled && import.meta.env.DEV && (
+            <button
+              type="button"
+              className="hand-link hand-link-eye"
+              disabled={recording !== null || drilling !== null}
+              onClick={() => void drill()}
+              title="Twelve seconds: a ring steps centre, left, right, centre, up, down. Follow it with your eyes only, head still. Saves a JSON with the ring as ground truth."
+            >
+              {drilling ?? 'DRILL'}
             </button>
           )}
           {synthetic ? (

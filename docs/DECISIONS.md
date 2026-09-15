@@ -961,3 +961,244 @@ the real recordings decide.
 - Tests 237 (+12). verify-eye 11/11, verify-centering 13/13.
 - Still open, needs the user: the four recordings; which symptom
   dominated; the eyeball model decision; retuning cutoffs from real data.
+
+## First real recordings: what the camera actually delivers (2026-09-15)
+Four 10 s clips (rest, horizontal, vertical, head turn) in recordings/.
+Findings, each with its fix:
+- **Detection ran at 10 Hz**, not 30: every clip has frames 100 ms apart.
+  Hand and face models run serially on the main thread. Fixes: with the
+  eye channel on and no hand in view the hand model runs every 3rd frame
+  (`handEveryNWhileEye`); the median pre-filter stands down above
+  `medianMaxDtMs` (60 ms) - at 10 Hz it was 300 ms of lag; the fixation
+  window's ceiling is 800 ms (8 frames at 10 Hz). The overlay now shows the
+  rate, each model's cost and its delegate (GPU/CPU) so the cause is
+  visible on the demo machine.
+- **This user's OPEN-eye blink value is 0.2-0.25** (real blink 0.7). The
+  0.3 rejection floor treated open eyes as half-shut: iris ok rate 69-79 %,
+  head-only mode 12-16 % of frames (iris zeroed -> the point jumped), one
+  freeze of 2.3 s. Fix: per-eye open-eye baseline (EMA over frames plainly
+  open) + `blinkMargin` 0.2, never below the floor. Replay: both eyes ok
+  98-100 %, head-only 0 %.
+- **The two eyes carry a constant offset** from each other (L - R = +0.24,
+  spread 0.03-0.06 across all clips). The raw-value vergence rule saw that
+  as disagreement and flip-flopped which eye it kept, so the combined
+  iris jumped by ~0.3 - the "shaky". Fix: vergence on a CHANGE in the
+  eyes' difference (EMA, 5 s), dropping the eye that moved more since its
+  last accepted value. Tested: a constant offset never trips it; a
+  one-eye jump drops that eye for exactly its duration.
+- **The blendshapes carry about twice the horizontal signal the geometry
+  does** on this camera (horizontal clip, both-ok frames: blend sd 0.08-0.09
+  vs geometry 0.03-0.05; frame-to-frame noise similar). The separate-source
+  fit already weighs that; nothing to change, worth knowing.
+- **Head turn drifted the point 406 px** with the eyes on centre (default
+  map). The eyes counter-rotate (blend to -0.72 at 9° of yaw); rings at one
+  head pose cannot separate head gain from eye gain. Fix: a calibration
+  HEAD-TURN stage (`calHeadTurn`, 6 s): the centre ring stays up, the user
+  turns their head slowly with their eyes on it, a sample every 250 ms with
+  the centre as target. This is the cheap alternative to the eyeball-centre
+  model; the model stays gated on the next head-turn clip.
+- **Recorder flaw**: a rejected eye's slot carried its blendshape fallback,
+  so the first clips replay wrong for per-eye analysis. The recorder now
+  stores the pure geometric per-eye offsets (`geom`); the replay keeps a
+  rejected eye rejected on old clips.
+- Accuracy floor implied by the clips: rest blend noise ~0.05 units against
+  ~0.45 units for the screen width = ~150 px per frame, ÷2-3 after the
+  fixation mean at 10 Hz - consistent with the 66 px calibration residual
+  the user saw. More frames (the rate) and more averaging are the levers;
+  the pupil finder remains the one signal-side lever left.
+
+## Eyes only, head still; the saccade drill (2026-09-14, user direction)
+- **The product is eyes only, with the head still.** Asked whether a
+  nose (head) pointer would be easier, the user said no: "I want a user
+  to be able to keep their head still and just use their eyes. We are
+  not that far away. It just jitters and usually falls short or overdoes
+  it." A head pointer is the more robust signal (~1° of head noise is
+  ~40 px against ~150 px per frame from the iris) and it stays as the
+  head-only fallback; it is not the interaction.
+- **The head-turn calibration stage is off by default** (`calHeadTurn`
+  false; the slider stays for a head-moving demo). First live run on the
+  user's Mac: overlay 16 Hz, face 15 ms GPU, hand 9 ms GPU, blink
+  thresholds 0.45/0.45 (the adaptive baseline works), both eyes ok
+  100 %; calibration 33 points (9 rings + 24 head-turn samples) at
+  120 px residual against 66 px with rings alone; eyes vs head 450 px
+  with the head straight. With the head still the stage adds samples a
+  linear head+eye map cannot fit and only widens the residual.
+- **16 Hz is by design, not the machine**: `detectEveryNFrames` 2 on a
+  30 fps camera. Both models run on the GPU, so every frame is
+  affordable; the user tries 1 (expect ~30 Hz: three times the frames in
+  the fixation mean). The 10 Hz in the first clips was the same cadence
+  on a busier machine.
+- **"Falls short or overdoes it" was unmeasured.** The first clips had
+  no ground truth and no map: the replay ran the DEFAULT map, so its px
+  said nothing about the calibrated pointer. Now every recording carries
+  the calibration in force (`EyeRecording.calibration`; the replay runs
+  it), and a saccade DRILL (HUD button, leva button, `drillStepMs`
+  2000) steps a ring centre, left, right, centre, up, down at calInset
+  while recording, the ring as `truth`. The replay prints per-step
+  response (`saccadeSteps`: under 1 falls short, over 1 overshoots)
+  beside the mean. Tested: a map at half gain reads 0.35-0.65 on every
+  step, at 1.5x over 1.3; a clip without a map falls back to the default.
+- Replay of the first four clips on the default map, for the record:
+  rest filtered 59 px rms (x 49, y 34), frozen 91 %; horizontal 64 px;
+  vertical 114 px (x 108); head 110 px. Target under 25 px. The vertical
+  clip's HORIZONTAL noise is the first thing to read on the new clips.
+- Tests 246 (+2). Playwright gates not run (the user's machine).
+
+## No rotational limits on hand or trackpad drag (2026-09-14, user direction)
+Brief (user): "there should be no rotational limits from the hand control or
+drag with the trackpad."
+- The only bound either channel hit was the pitch clamp the neural scene
+  passed into the shared integrator (`point.pitchClampFree`, 1.65 rad,
+  ORB_SELECT_SPEC §1). Yaw was already unbounded and the free detent is
+  off in the neural profile, so nothing else pulled a released rotation.
+- NeuralScene now passes `Infinity` (`NO_PITCH_CLAMP`) to both
+  `applyInputEvent` and `stepPhysics`. `clampPitch` is inert at Infinity;
+  the pure core is untouched and the globe keeps `PITCH_CLAMP` with its
+  frozen tests.
+- `point.pitchClampFree` removed from `PointConfig` / `NCONF` (it would be
+  dead config). The centering and pointing tests that sampled random
+  pitches inside it now sample the full circle (±π); all 246 tests green.
+- Known consequence, not addressed: yaw is the inner Euler axis, so past
+  ±90° of pitch a horizontal drag spins the field the opposite way on
+  screen from the way it does upright. A trackball (quaternion) model
+  would fix that; it is a separate decision.
+- `NCONF.scene.pitchClamp` (1.1) stays as the dead config it already was;
+  still flagged for removal.
+
+## The drill's verdict: the iris filter never opened up (2026-09-14)
+The first DRILL clip (15 Hz, 9-ring calibration at 60 px residual, no
+head-turn stage), replayed on the user's own map:
+- **Per-step response 0.76 0.78 0.68 0.98 0.82 (mean 0.80), settle
+  689 ms.** The trajectories show why: the eyes land ~400 ms after the
+  ring moves (reaction + saccade) and the RAW mapped point lands with
+  them, but the filtered point then creeps for another 600-800 ms.
+  Cause: the One Euro's speed term (`beta` 0.015) is scaled for the head
+  in degrees/s; the iris and blendshape features are normalised units,
+  where a saccade is ~3 units/s, so the term added 0.05 Hz and the iris
+  was a fixed 0.7 Hz low-pass (time constant 227 ms, 95 % in ~680 ms).
+  The same lag biased the CALIBRATION: its sample window (600-1600 ms
+  after a ring appears) saw features still 10-15 % short, which is the
+  12 % gain shortfall the raw point showed on both horizontal steps.
+- **Fix: `irisBeta`, its own knob (4), the head keeps `beta`.** Sweep on
+  the drill + rest + horizontal clips (minCutoff 0.7 / 1.0 / 1.5 x beta
+  0.015 ... 8): at 0.7 / 4 the drill's response goes 0.80 -> 0.97 (steps
+  1.02 0.91 0.87 1.10 0.94), settle 689 -> 526 ms, truth error 283 -> 262
+  px; the rest clip's filtered jitter is unchanged (59.4 -> 59.5 px).
+  The remaining ~500 ms is reaction time + the saccade itself. Cutoff
+  changes bought nothing on top. The next calibration inherits the fix
+  (its window now sees settled features).
+- **Vertical drifts with the eyelids.** The centre ring read 245 px apart
+  in y six seconds apart (segment 0 vs 3): eyeLookDown blendshape -0.111
+  vs -0.048 (x 2839 px/unit = 179 px) with blink 0.29 vs 0.24, plus
+  ~34 px of head pitch. The fit leans on blendY (2839) over geometric
+  irisY (365) for the vertical, and blendY moves with eye openness. The
+  geometric irisY is no better (cross-coupled: 0.207 looking left vs
+  0.273 at centre, same height). This is the signal-side problem the
+  pupil finder is for; the filter cannot fix it. Horizontal is sound:
+  both horizontal steps within 12 % on the raw point, sd 7-30 px at
+  fixation.
+- **Head term, second order.** With the head still during calibration the
+  head columns have no variance and the fit's head gain is arbitrary: x
+  -53 px/deg (wrong sign vs the physical +38), y -56. Over the clip the
+  head swayed 1.4° / 1.8° (sd 0.27 / 0.37), i.e. 76 / 102 px through
+  those gains. Not fixed yet; candidates are tying the head gain to the
+  fitted iris gain (a head turn with the eyes on a target is a no-op) or
+  dropping the head columns when their variance is small.
+- The overlay's cadence: the clip is still at 15 Hz (median 67 ms
+  between frames), so `detectEveryNFrames` was still 2.
+- `replayRecording` gained an optional per-frame trace tap (used for the
+  trajectory analysis). Tests 248 (+1; the 2.4 cutoff test now holds both
+  speed terms at 0 so only the cutoffs differ).
+
+## Orbit index removed from the neural scene (2026-09-14, user direction)
+Brief (user): screenshot of the ORBITS panel (Growth / Revenue / Operations /
+Retention / Quality with latitude and count), "remove these".
+- App.tsx mounts `OrbitIndex` only when `!neural`, the same scope guard the
+  brass Reticle uses. `?scene=globe` keeps the panel; the component, its
+  CSS and the `step` pitch ladder it drives are untouched (the keyboard and
+  the drill-in recenter still emit `step`).
+- Rationale: the panel is the globe's category ladder. With free rotation,
+  no detents and no pitch clamp the neural scene has no latitude grid to
+  walk, so the panel named positions that mean nothing in the field.
+
+## Second drill: "it selects too high" is the vertical signal (2026-09-14)
+Recalibrated (9 rings, 52 px residual, head x gain now +8.7 px/deg),
+then a DRILL, still at 15 Hz. Filtered vertical error per segment:
+centre -21, left -50, right +89, centre -61, up -42, down -173 px
+(negative = above the target). Five of six read HIGH, the down ring
+worst; the same centre ring drifted 40 px between its two visits six
+seconds apart. Horizontal: within 40 px everywhere but the left ring.
+- **Cause: the vertical map rides on one blendshape.** y = 291 - 67·pitch
+  + 230·irisY - 2749·blendY. The geometric irisY does not tell centre
+  (0.28-0.30) from down (0.29) on this face - the lid covers the iris
+  looking down - so the fit put the vertical on eyeLookDown, whose
+  centre reading wandered -0.084 .. -0.102 (50 px) and read -0.144
+  looking RIGHT at the same height (150 px low). The head-pitch term
+  (-67 px/deg) is the fit using head pitch as a proxy for vertical gaze
+  (the pose estimate tilts with the eyes); consistent with calibration,
+  so not the drift.
+- **Not fixable by the filter or the map.** irisBeta is doing its job
+  (fixation sd 2-8 px). The bias is slow drift and cross-coupling in
+  the signal: ±60-90 px vertical at any moment on this face.
+- **Learning from confirms cannot correct it either**: Enter selects the
+  ringed node, so a confirm with the ring on the wrong node teaches the
+  map that wrong node. Only a confirm the user placed themselves (mouse
+  or hand on the node they meant) is truth.
+- Done now: recordings carry the calibration SAMPLES (`calSamples`), and
+  the reader test prints, per ring, how it read at calibration vs in the
+  clip - the next drill shows where the drift is.
+- Options, the user's call: (1) the pupil finder on the raw 720p crop -
+  the one signal-side lever; (2) a selector prior that prefers the node
+  BELOW the point when two are near (matches five of six segments, but
+  is a bandage); (3) layout: keep selectable neighbours >= 150 px apart
+  vertically.
+
+## Click learning (2026-09-14, user direction: "Implement click learning")
+- **A positioned click on a node is a verified gaze sample.** The user
+  looks where they click. Enter can only confirm the RINGED node, so
+  when the ring sits one node too high a gaze confirm teaches the map
+  that wrong node; a click on the node they meant is the only truth
+  that can pull a biased map back. `learnFromClicks` (on; slider),
+  separate from `learnFromConfirms`. The scene's click path passes the
+  hit node's projected centre to `eyeLearn(..., 'click')`; shell reports
+  do not teach.
+- **Guard shared by both sources** (`learnAllowed`): the source's flag, a
+  face present, and NOT head-only - a head-only moment has the iris
+  zeroed and would teach a head-only map. This guard now applies to
+  gaze confirms too (it did not before).
+- **How fast it learns, from the test**: a map reading 70 px high is
+  halved after 6 clicks spread across the field and under 15 px after
+  12, because the calibration keeps ~60 % of its weight at 6 confirms
+  and 20 % at 12 (`baseWeight`). Learned samples halve in weight every
+  3 min, so tracking a drift takes about a click a minute; stop and it
+  slides back toward the calibration. It fixes where the map is
+  centred, never the moment-to-moment wander (~60 px vertical on this
+  user's face).
+- Per user, per sitting, and only when they click: a hands-free visitor
+  gets the nine-ring calibration and nothing else. The product answer
+  for the vertical stays layout spacing / a taller capture cone and,
+  if the gate says so, the pupil finder.
+- Tests 250 (+2: the guard; the 70 px correction curve).
+
+## FEEL panel behind a gear icon (2026-09-14, user direction)
+Brief (user): "Make the FEEL dropdown a little settings icon in the top right
+corner."
+- FeelPanel renders a 28 px stroked gear (`.feel-gear`, fixed top-right,
+  instrument register: outline, no glow) and mounts leva with
+  `hidden={!open}`. Closed by default. Leva's `hidden` unmounts only the
+  panel DOM; the global store and every `useControls` registration
+  (FeelPanel, NeuralScene folders, EyeControls) stay live, so reopening
+  shows the current values and slider writes into FEEL / NCONF are
+  unaffected while closed.
+- The title bar stays (title FEEL, filter on, drag off) and its chevron
+  closes the panel: a controlled `collapsed` routes leva's collapse into
+  the gear's state, so the chevron and the gear never disagree.
+- An explicit `<Leva>` renders its panel inline (a child of `.app`), not in
+  leva's `#leva__root` portal, so FeelPanel wraps it in `.feel-leva` as the
+  CSS hook. The root is offset to top 50 px to hang under the gear, and
+  leva's own folder-list cap (`calc(100vh - 20px - titleBar)`) is reduced
+  by the same 40 px so the bottom edge stays where leva put it. Adding a
+  second scroll container on the root instead scrolled the title bar out of
+  view on open; rejected.
+- Leva toggles only on the chevron icon, not the title text.
+- `?tune=0` still hides everything, gear included, for scripted shots.

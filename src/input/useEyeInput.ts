@@ -11,8 +11,8 @@ import { motionPrefs } from '../config/feel'
 import { useStore } from '../store'
 import type { InputBus, InputEvent } from './InputBus'
 import { cursorRuntime } from './cursor'
-import { createOnlineCalibration, learnConfirm } from './eye/calibration'
-import type { CalibrationSample, OnlineCalibration } from './eye/calibration'
+import { createOnlineCalibration, learnAllowed, learnConfirm } from './eye/calibration'
+import type { CalibrationSample, LearnSource, OnlineCalibration } from './eye/calibration'
 import { createEyeChannel, eyeRuntime } from './eye/channel'
 import type { EyeChannel, EyeContext, EyeTelemetry } from './eye/channel'
 import { EYE } from './eye/config'
@@ -32,6 +32,8 @@ declare global {
     __eyeOnline?: OnlineCalibration
     /** DEV: record `seconds` of raw frames; resolves with the recording and downloads it as JSON */
     __eyeRecord?: (seconds?: number, label?: string) => Promise<EyeRecording>
+    /** DEV: the saccade drill - a ring steps through six positions while recording; the ring is the clip's ground truth */
+    __eyeDrill?: () => Promise<EyeRecording>
     /** DEV: the last recording */
     __eyeRecording?: EyeRecording
   }
@@ -52,8 +54,8 @@ export function eyeSetBase(samples: CalibrationSample[], cal: OnlineCalibration[
  * the features of this moment map to that point. Refit; adopt if it does
  * not make the map worse on the evidence. The HUD label follows.
  */
-export function eyeLearn(targetX: number, targetY: number): void {
-  if (!EYE.learnFromConfirms || !eyeChannel.enabled || !eyeRuntime.facePresent) return
+export function eyeLearn(targetX: number, targetY: number, source: LearnSource = 'gaze'): void {
+  if (!eyeChannel.enabled || !learnAllowed(EYE, eyeRuntime, source)) return
   const viewport = { w: window.innerWidth, h: window.innerHeight }
   const sample: CalibrationSample = { features: { ...eyeRuntime.features }, target: { x: targetX, y: targetY } }
   const { state, changed, report } = learnConfirm(
@@ -68,7 +70,7 @@ export function eyeLearn(targetX: number, targetY: number): void {
   }
   if (import.meta.env.DEV) {
     window.__eyeOnline = eyeOnline.state
-    console.info('[eye] learn', { changed, kept: state.learned.length, rejected: state.rejected, residualPx: report?.residualPx })
+    console.info('[eye] learn', { source, changed, kept: state.learned.length, rejected: state.rejected, residualPx: report?.residualPx })
   }
 }
 
@@ -119,29 +121,58 @@ export function useEyeInput(bus: InputBus): void {
       window.__eyeConf = EYE
       // The recorder (plan phase 1): raw features at detector rate, for the
       // replay harness. Dev only; downloads a JSON the user can drop into
-      // recordings/ for tests/eyeReplay.test.ts.
-      window.__eyeRecord = (seconds = 10, label = 'clip') =>
+      // recordings/ for tests/eyeRecordings.test.ts. The calibration in
+      // force rides along, so the replay's px are on the user's map.
+      const save = (rec: EyeRecording, label: string) => {
+        window.__eyeRecording = rec
+        try {
+          const blob = new Blob([JSON.stringify(rec)], { type: 'application/json' })
+          const a = document.createElement('a')
+          a.href = URL.createObjectURL(blob)
+          a.download = `eye-${label}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+          a.click()
+          setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+        } catch {
+          // no download in this context: the recording is still on window.__eyeRecording
+        }
+        console.info('[eye] recorded', label, rec.frames.length, 'frames')
+      }
+      const capture = (ms: number, label: string, truth?: EyeRecording['truth']) =>
         new Promise<EyeRecording>((resolve) => {
           const frames: EyeRecording['frames'] = []
           eyeChannel.record = (f) => frames.push({ ...f, raw: { ...f.raw } })
           setTimeout(() => {
             eyeChannel.record = null
-            const rec: EyeRecording = { frames, viewport: { w: window.innerWidth, h: window.innerHeight }, label }
-            window.__eyeRecording = rec
-            try {
-              const blob = new Blob([JSON.stringify(rec)], { type: 'application/json' })
-              const a = document.createElement('a')
-              a.href = URL.createObjectURL(blob)
-              a.download = `eye-${label}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
-              a.click()
-              setTimeout(() => URL.revokeObjectURL(a.href), 5000)
-            } catch {
-              // no download in this context: the recording is still on window.__eyeRecording
+            const rec: EyeRecording = {
+              frames, viewport: { w: window.innerWidth, h: window.innerHeight }, label,
+              calibration: eyeChannel.calibration, calSamples: eyeOnline.state.base, ...(truth ? { truth } : {}),
             }
-            console.info('[eye] recorded', label, frames.length, 'frames')
+            save(rec, label)
             resolve(rec)
-          }, seconds * 1000)
+          }, ms)
         })
+      window.__eyeRecord = (seconds = 10, label = 'clip') => capture(seconds * 1000, label)
+      // The saccade drill: a ring steps centre, left, right, centre, up, down
+      // (EYE.drillStepMs each, at calInset like the calibration rings) while
+      // the recorder runs. The ring positions are the clip's ground truth, so
+      // the replay reports per-step response - the "falls short or
+      // overshoots" the user feels - on the map in force.
+      window.__eyeDrill = () => {
+        const w = window.innerWidth
+        const h = window.innerHeight
+        const dx = (w / 2) * EYE.calInset
+        const dy = (h / 2) * EYE.calInset
+        const ring = [[w / 2, h / 2], [w / 2 - dx, h / 2], [w / 2 + dx, h / 2], [w / 2, h / 2], [w / 2, h / 2 - dy], [w / 2, h / 2 + dy]]
+        const step = Math.max(500, EYE.drillStepMs)
+        const truth: NonNullable<EyeRecording['truth']> = []
+        ring.forEach(([x, y], i) => {
+          setTimeout(() => {
+            truth.push({ t: performance.now(), x, y })
+            useStore.getState().setEyeDrill({ x, y })
+          }, i * step)
+        })
+        return capture(ring.length * step, 'drill', truth).finally(() => useStore.getState().setEyeDrill(null))
+      }
     }
 
     const ensureModel = (): void => {
@@ -159,11 +190,13 @@ export function useEyeInput(bus: InputBus): void {
           }
           try {
             landmarker = await vision.FaceLandmarker.createFromOptions(fileset, options)
+            eyeRuntime.delegate = 'GPU'
           } catch {
             landmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
               ...options,
               baseOptions: { ...options.baseOptions, delegate: 'CPU' as const },
             })
+            eyeRuntime.delegate = 'CPU'
           }
         } catch {
           landmarker = null
@@ -266,6 +299,7 @@ export function useEyeInput(bus: InputBus): void {
       if (import.meta.env.DEV) {
         delete window.__eyeInfo
         delete window.__eyeRecord
+        delete window.__eyeDrill
       }
     }
   }, [bus])

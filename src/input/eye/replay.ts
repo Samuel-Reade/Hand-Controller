@@ -4,9 +4,10 @@
 // recordings; `recordings/*.json` (dev, never shipped) are the real ones.
 
 import { createEyeChannel, createEyeTelemetry } from './channel'
-import type { EyeContext, EyeRecordFrame } from './channel'
+import type { EyeContext, EyeRecordFrame, EyeTelemetry } from './channel'
 import type { EyeConfig } from './config'
-import type { FaceFrame } from './face'
+import type { CalibrationSample } from './calibration'
+import type { Calibration, FaceFrame } from './face'
 import { syntheticFace } from './__synthetic__/face'
 
 export interface EyeRecording {
@@ -17,6 +18,10 @@ export interface EyeRecording {
   label?: string
   /** optional ground truth for saccade clips: the screen points looked at, in order, with times */
   truth?: { t: number; x: number; y: number }[]
+  /** the map in force when the clip was recorded; the replay runs it, so the px numbers are the user's, not the default map's */
+  calibration?: Calibration | null
+  /** the explicit calibration's samples (features per ring): how each ring READ at calibration time, to diff against the clip */
+  calSamples?: CalibrationSample[]
 }
 
 export interface ReplayMetrics {
@@ -30,6 +35,8 @@ export interface ReplayMetrics {
   /** with `truth` (>= 2 points): fraction of the true excursion the filtered point covers, and settle ms */
   saccadeResponse: number
   saccadeSettleMs: number
+  /** per truth step: the fraction covered - under 1 falls short, over 1 overshoots */
+  saccadeSteps: number[]
   /** with `truth`: rms distance from the filtered point to the truth point over the clip */
   truthErrorPx: number
   /** how often the point was held by the freeze */
@@ -46,11 +53,19 @@ export interface ReplayMetrics {
 function faceFor(rec: EyeRecordFrame, cfg: EyeConfig): FaceFrame {
   void cfg
   const f = rec.raw
+  // Per-eye values so the eye combination and the vergence rule run on the
+  // real per-eye data. Clips without `geom` (the first four) carry the
+  // blendshape fallback in a rejected eye's slot; for those, keep that eye
+  // rejected on replay (blink forced past the threshold) so the frame
+  // replays as it ran, rather than as a bogus geometric value.
+  const g = rec.geom
   return syntheticFace(
     {
       yaw: f.headYaw, pitch: f.headPitch,
       irisX: f.irisX, irisY: f.irisY,
-      blinkL: rec.blinkL, blinkR: rec.blinkR,
+      irisLX: g ? g.LX : f.eyeLX, irisLY: g ? g.LY : f.eyeLY, irisRX: g ? g.RX : f.eyeRX, irisRY: g ? g.RY : f.eyeRY,
+      blendLX: f.blendLX, blendLY: f.blendLY, blendRX: f.blendRX, blendRY: f.blendRY,
+      blinkL: g || rec.okL ? rec.blinkL : 1, blinkR: g || rec.okR ? rec.blinkR : 1,
       presence: rec.confidence > 0 ? 1 : 0,
     },
     rec.t,
@@ -63,9 +78,15 @@ const rms = (a: number[]) => {
   return Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length)
 }
 
-export function replayRecording(recording: EyeRecording, cfg: EyeConfig): ReplayMetrics {
+export function replayRecording(
+  recording: EyeRecording,
+  cfg: EyeConfig,
+  /** optional per-frame tap on the telemetry, for trajectory analysis */
+  trace?: (frame: EyeRecordFrame, telemetry: EyeTelemetry) => void,
+): ReplayMetrics {
   const telemetry = createEyeTelemetry()
   const ch = createEyeChannel({ ...cfg, enabled: true, mode: 'point' }, telemetry)
+  if (recording.calibration) ch.calibration = recording.calibration
   const ctx: EyeContext = {
     viewport: recording.viewport, cameraOn: true, reducedMotion: false, shellOpen: false, pointerIdleMs: Infinity,
   }
@@ -76,6 +97,7 @@ export function replayRecording(recording: EyeRecording, cfg: EyeConfig): Replay
   for (const rec of recording.frames) {
     ch.process(faceFor(rec, cfg), rec.t, ctx)
     if (!telemetry.facePresent) continue
+    trace?.(rec, telemetry)
     filtered.push({ t: rec.t, x: telemetry.gazeX, y: telemetry.gazeY })
     raw.push({ x: telemetry.rawX, y: telemetry.rawY })
     if (telemetry.frozen) frozenFrames++
@@ -92,6 +114,7 @@ export function replayRecording(recording: EyeRecording, cfg: EyeConfig): Replay
     restJitterYPx: jy,
     saccadeResponse: NaN,
     saccadeSettleMs: NaN,
+    saccadeSteps: [],
     truthErrorPx: NaN,
     frozenFraction: n ? frozenFrames / n : 0,
     eyeContributionPx: n ? eyeSum / n : 0,
@@ -129,6 +152,7 @@ export function replayRecording(recording: EyeRecording, cfg: EyeConfig): Replay
     }
     responses = responses.filter((r) => Number.isFinite(r))
     settles = settles.filter((s) => Number.isFinite(s))
+    out.saccadeSteps = responses
     out.saccadeResponse = responses.length ? responses.reduce((s, r) => s + r, 0) / responses.length : NaN
     out.saccadeSettleMs = settles.length ? settles.reduce((s, r) => s + r, 0) / settles.length : NaN
   }
@@ -141,6 +165,7 @@ export function formatMetrics(m: ReplayMetrics): string {
   return (
     `frames ${m.frames} · rest jitter raw ${f(m.restJitterRawPx)} / filtered ${f(m.restJitterPx)} px ` +
     `(x ${f(m.restJitterXPx)} y ${f(m.restJitterYPx)}) · saccade response ${f(m.saccadeResponse, 2)} settle ${f(m.saccadeSettleMs, 0)} ms ` +
+    (m.saccadeSteps.length ? `[${m.saccadeSteps.map((r) => r.toFixed(2)).join(' ')}] ` : '') +
     `· truth error ${f(m.truthErrorPx)} px · frozen ${f(m.frozenFraction * 100, 0)} % · eye contribution ${f(m.eyeContributionPx)} px`
   )
 }

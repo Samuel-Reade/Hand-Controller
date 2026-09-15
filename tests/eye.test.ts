@@ -21,7 +21,7 @@ import {
 } from '../src/input/eye/face'
 import type { FaceFrame, GazeFeatures } from '../src/input/eye/face'
 import {
-  calibrationTargets, createOnlineCalibration, fitCalibration, fitCalibrationReport, learnConfirm, mapWith, medianFeatures,
+  calibrationTargets, createOnlineCalibration, fitCalibration, fitCalibrationReport, learnAllowed, learnConfirm, mapWith, medianFeatures,
 } from '../src/input/eye/calibration'
 import type { CalibrationSample } from '../src/input/eye/calibration'
 import { createFixation, createGazeFocus, stepFixation, stepGazeFocus } from '../src/neural/gazeFocus'
@@ -646,6 +646,35 @@ describe('accuracy: learning from confirms', () => {
   const user = (x: number, y: number, drift = 0): CalibrationSample => ({
     features: feat({ headYaw: (x - drift - 720) / 120, headPitch: (y - 450) / -110, irisX: (x - drift - 720) / 2000, irisY: (y - 450) / -2400, blendX: (x - drift - 720) / 2000, blendY: (y - 450) / -2400, ok: true }),
     target: { x, y },
+  })
+
+  it('a click may teach only with learnFromClicks, a face, and the iris in play; the gaze flag is separate', () => {
+    const face = { facePresent: true, headOnly: false }
+    expect(learnAllowed({ learnFromConfirms: true, learnFromClicks: true }, face, 'click')).toBe(true)
+    expect(learnAllowed({ learnFromConfirms: true, learnFromClicks: false }, face, 'click')).toBe(false)
+    expect(learnAllowed({ learnFromConfirms: false, learnFromClicks: true }, face, 'gaze')).toBe(false)
+    expect(learnAllowed({ learnFromConfirms: false, learnFromClicks: true }, face, 'click')).toBe(true)
+    expect(learnAllowed({ learnFromConfirms: true, learnFromClicks: true }, { facePresent: false, headOnly: false }, 'click')).toBe(false)
+    expect(learnAllowed({ learnFromConfirms: true, learnFromClicks: true }, { facePresent: true, headOnly: true }, 'gaze')).toBe(false)
+  })
+
+  it('clicks on the nodes the user meant pull a map that reads 70 px high back down', () => {
+    const base = calibrationTargets(VIEW, 0.65, true).map((t) => user(t.x, t.y))
+    let s = { ...createOnlineCalibration(), base, cal: fitCalibrationReport(base, c, dflt, 1e-3, VIEW).cal }
+    // the user's vertical has drifted: looking at (x, y) now produces the features the base saw at (x, y - 70)
+    const drifted = (x: number, y: number): CalibrationSample => ({ features: user(x, y - 70).features, target: { x, y } })
+    const probe = drifted(700, 500)
+    const before = mapWith(s.cal!, probe.features)
+    expect(before.y - 500).toBeLessThan(-50) // reads high
+    // the base keeps ~60 % of its weight at six confirms and 20 % at twelve (baseWeight)
+    const spots = [[300, 200], [1100, 250], [700, 650], [400, 500], [1000, 700], [800, 350], [500, 300], [1150, 550], [250, 600], [900, 150], [600, 750], [1050, 450]]
+    for (const [x, y] of spots.slice(0, 6)) s = learnConfirm(s, drifted(x, y), c, dflt, VIEW).state
+    const six = mapWith(s.cal!, probe.features)
+    expect(Math.abs(six.y - 500)).toBeLessThan(Math.abs(before.y - 500) / 2)
+    for (const [x, y] of spots.slice(6)) s = learnConfirm(s, drifted(x, y), c, dflt, VIEW).state
+    const twelve = mapWith(s.cal!, probe.features)
+    expect(Math.abs(twelve.y - 500)).toBeLessThan(15)
+    expect(Math.abs(twelve.x - 700)).toBeLessThan(15)
   })
 
   it('an explicit base plus confirms tracks a head shift the base could not see', () => {

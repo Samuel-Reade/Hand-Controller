@@ -169,12 +169,58 @@ function eyeOffset(
   return { x, y, ok, blink, span: cornerSpan }
 }
 
+/** Per-eye iris rejection thresholds (the channel adapts them to the user's open-eye baseline). */
+export interface BlinkThresholds {
+  L: number
+  R: number
+}
+
+/** The two eyes' offsets, each judged against its own blink threshold. */
+export function eyeOffsets(
+  frame: FaceFrame,
+  cfg: EyeConfig,
+  head?: HeadPose,
+  thresholds?: BlinkThresholds,
+): { L: EyeOffset; R: EyeOffset } {
+  const p = frame.landmarks
+  const b = frame.blendshapes
+  const tL = thresholds?.L ?? cfg.blinkIrisThreshold
+  const tR = thresholds?.R ?? cfg.blinkIrisThreshold
+  const L = eyeOffset(p, LM.leftIris, LM.leftOuter, LM.leftInner, LM.leftUpper, LM.leftLower, b.eyeBlinkLeft ?? 0, { ...cfg, blinkIrisThreshold: tL }, head)
+  const R = eyeOffset(p, LM.rightIris, LM.rightOuter, LM.rightInner, LM.rightUpper, LM.rightLower, b.eyeBlinkRight ?? 0, { ...cfg, blinkIrisThreshold: tR }, head)
+  return { L, R }
+}
+
 /**
- * Both eyes, combined by quality (ideas 3.6): each ok eye weighs
+ * Both eyes combined by quality (ideas 3.6): each ok eye weighs
  * (1 - blink) x its apparent size (the eye nearer the camera under yaw is
- * the more reliable). A vergence check (3.8): when the two disagree by
- * more than vergenceMax the one farther from the blendshape estimate is
- * dropped for this frame rather than averaged in.
+ * the more reliable). `drop` is the vergence verdict (3.8) - decided by the
+ * caller, because a good verdict needs history: the two eyes carry a
+ * CONSTANT offset from each other on a real face (0.3 on the first real
+ * recording), so raw-value disagreement is not mis-tracking; a change in
+ * their difference is.
+ */
+export function combineEyes(
+  L: EyeOffset,
+  R: EyeOffset,
+  cfg: EyeConfig,
+  drop: 'L' | 'R' | null = null,
+): IrisOffset {
+  const useL = L.ok && drop !== 'L'
+  const useR = R.ok && drop !== 'R'
+  const wL = useL ? (cfg.eyeQualityWeights ? (1 - L.blink) * L.span : 1) : 0
+  const wR = useR ? (cfg.eyeQualityWeights ? (1 - R.blink) * R.span : 1) : 0
+  const sw = wL + wR
+  const x = sw > 0 ? (wL * L.x + wR * R.x) / sw : 0
+  const y = sw > 0 ? (wL * L.y + wR * R.y) / sw : 0
+  return { x, y, okL: L.ok, okR: R.ok, L, R, vergenceDrop: useL && useR ? null : drop }
+}
+
+/**
+ * Stateless convenience (tests, one-off use): eyes combined, with the
+ * raw-value vergence rule - the eye farther from the blendshapes is dropped
+ * when the two disagree by more than vergenceMax. The channel uses the
+ * history-aware rule instead (channel.ts).
  */
 export function irisOffset(
   frame: FaceFrame,
@@ -182,26 +228,14 @@ export function irisOffset(
   head?: HeadPose,
   blend?: { L: { x: number; y: number }; R: { x: number; y: number } },
 ): IrisOffset {
-  const p = frame.landmarks
-  const b = frame.blendshapes
-  const L = eyeOffset(p, LM.leftIris, LM.leftOuter, LM.leftInner, LM.leftUpper, LM.leftLower, b.eyeBlinkLeft ?? 0, cfg, head)
-  const R = eyeOffset(p, LM.rightIris, LM.rightOuter, LM.rightInner, LM.rightUpper, LM.rightLower, b.eyeBlinkRight ?? 0, cfg, head)
-  let useL = L.ok
-  let useR = R.ok
-  let vergenceDrop: 'L' | 'R' | null = null
-  if (useL && useR && Math.hypot(L.x - R.x, L.y - R.y) > cfg.vergenceMax) {
-    const ref = blend ? { L: blend.L, R: blend.R } : null
-    const dL = ref ? Math.hypot(L.x - ref.L.x, L.y - ref.L.y) : 0
-    const dR = ref ? Math.hypot(R.x - ref.R.x, R.y - ref.R.y) : 0
-    // no reference: keep the larger (nearer) eye
-    if (ref ? dL > dR : L.span < R.span) { useL = false; vergenceDrop = 'L' } else { useR = false; vergenceDrop = 'R' }
+  const { L, R } = eyeOffsets(frame, cfg, head)
+  let drop: 'L' | 'R' | null = null
+  if (L.ok && R.ok && Math.hypot(L.x - R.x, L.y - R.y) > cfg.vergenceMax) {
+    const dL = blend ? Math.hypot(L.x - blend.L.x, L.y - blend.L.y) : 0
+    const dR = blend ? Math.hypot(R.x - blend.R.x, R.y - blend.R.y) : 0
+    drop = blend ? (dL > dR ? 'L' : 'R') : L.span < R.span ? 'L' : 'R'
   }
-  const wL = useL ? (cfg.eyeQualityWeights ? (1 - L.blink) * L.span : 1) : 0
-  const wR = useR ? (cfg.eyeQualityWeights ? (1 - R.blink) * R.span : 1) : 0
-  const sw = wL + wR
-  const x = sw > 0 ? (wL * L.x + wR * R.x) / sw : 0
-  const y = sw > 0 ? (wL * L.y + wR * R.y) / sw : 0
-  return { x, y, okL: L.ok, okR: R.ok, L, R, vergenceDrop }
+  return combineEyes(L, R, cfg, drop)
 }
 
 /**

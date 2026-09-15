@@ -16,6 +16,7 @@ import { drawEyeIndicator, drawHands, handRuntime } from './handThumbnail'
 import { useStore } from '../store'
 import { eyeChannel, eyeControl } from './useEyeInput'
 import { eyeRuntime } from './eye/channel'
+import { EYE } from './eye/config'
 
 export { handRuntime } from './handThumbnail'
 
@@ -74,12 +75,14 @@ export function useHandInput(bus: InputBus): void {
         }
         try {
           landmarker = await vision.HandLandmarker.createFromOptions(fileset, options)
+          eyeRuntime.handDelegate = 'GPU'
         } catch {
           // Some machines have no usable GPU delegate - fall back to CPU.
           landmarker = await vision.HandLandmarker.createFromOptions(fileset, {
             ...options,
             baseOptions: { ...options.baseOptions, delegate: 'CPU' as const },
           })
+          eyeRuntime.handDelegate = 'CPU'
         }
       } catch {
         starting = false
@@ -126,16 +129,33 @@ export function useHandInput(bus: InputBus): void {
       }
     }
 
+    let handFrame = 0
+    let lastHands: NormalizedLandmark[][] = []
     function detect(): void {
       if (!running || !landmarker || !video) return
       const now = performance.now()
       let hands: NormalizedLandmark[][] = []
+      // ORB_EYE: with the gaze channel on and no hand in view, the hand model
+      // runs on every Nth frame so the face model gets the frames it needs
+      // (a real machine ran both models serially at 10 Hz). A hand in view
+      // restores every frame.
+      handFrame++
+      const skipHands =
+        eyeChannel.enabled && lastHands.length === 0 &&
+        handFrame % Math.max(1, Math.round(EYE.handEveryNWhileEye)) !== 0
+      if (skipHands) {
+        eyeControl.detect(video, now)
+        return
+      }
+      const t0 = performance.now()
       try {
         const result = landmarker.detectForVideo(video, now)
         hands = result.landmarks
       } catch {
         return // one bad frame is not a state change
       }
+      eyeRuntime.handDetectMs = performance.now() - t0
+      lastHands = hands
 
       const store = useStore.getState()
       // While a dashboard is open, hand input to the orb is suspended

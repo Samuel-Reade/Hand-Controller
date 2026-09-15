@@ -1,10 +1,16 @@
-// Gaze calibration flow (ORB_EYE_SPEC E4, essential in 'point' mode): five
-// targets - centre, then four corners at calInset - each shown for
+// Gaze calibration flow (ORB_EYE_SPEC E4, essential in 'point' mode): nine
+// (or five) targets - centre, then the ring at calInset - each shown for
 // calPointHoldMs; the FILTERED features from the last calSampleWindowMs are
-// median-pooled per target and fitted (input/eye/calibration.ts). The
-// result lives on the channel for this session only. Escape cancels. The
-// gaze pointer is suspended while this is on screen (store.eyeCalibrating).
-// Targets are ivory (data); no violet - nothing here is pressable.
+// median-pooled per target and fitted (input/eye/calibration.ts). Then,
+// optionally, a HEAD-TURN stage: the centre ring stays up while the user
+// slowly turns their head with their eyes on it, sampled every 250 ms
+// with the centre as the target. Rings at one head pose leave the fit
+// unable to tell head gain from eye gain (the two move together toward
+// every ring); the head-turn samples pin it down, which is what keeps the
+// map true when the head moves (the first real head-turn clip drifted
+// 406 px). The result lives on the channel for this session only. Escape
+// cancels. The gaze pointer is suspended while this is on screen
+// (store.eyeCalibrating). Targets are ivory (data); nothing here is pressable.
 
 import { useEffect, useMemo, useState } from 'react'
 import { calibrationTargets, fitCalibrationReport, medianFeatures } from '../input/eye/calibration'
@@ -27,8 +33,10 @@ export function EyeCalibration() {
   const calibrating = useStore((s) => s.eyeCalibrating)
   const setCalibrating = useStore((s) => s.setEyeCalibrating)
   const setResult = useStore((s) => s.setEyeCalResult)
+  const drill = useStore((s) => s.eyeDrill)
   const [index, setIndex] = useState(0)
   const [sampling, setSampling] = useState(false)
+  const [headTurn, setHeadTurn] = useState(false)
   // The target set for this run, fixed when the flow starts.
   const targets = useMemo(
     () => (calibrating ? calibrationTargets({ w: window.innerWidth, h: window.innerHeight }, EYE.calInset, EYE.calNinePoints) : []),
@@ -50,9 +58,36 @@ export function EyeCalibration() {
       if (eyeRuntime.facePresent) window_.push({ ...eyeRuntime.features })
     }
 
+    // The head-turn stage: the centre ring, one sample per 250 ms window,
+    // target = centre, for calHeadTurnMs.
+    const headTurnStage = () => {
+      if (cancelled) return
+      setHeadTurn(true)
+      setSampling(true)
+      const centre = targets[0]
+      let stageWindow: GazeFeatures[] = []
+      const tick = () => {
+        raf = requestAnimationFrame(tick)
+        if (eyeRuntime.facePresent) stageWindow.push({ ...eyeRuntime.features })
+      }
+      raf = requestAnimationFrame(tick)
+      const every = setInterval(() => {
+        const med = medianFeatures(stageWindow)
+        stageWindow = []
+        if (med) samples.push({ features: med, target: centre })
+      }, 250)
+      timer = setTimeout(() => {
+        clearInterval(every)
+        cancelAnimationFrame(raf)
+        finish()
+      }, EYE.calHeadTurnMs)
+      cleanupExtra = () => clearInterval(every)
+    }
+    let cleanupExtra: (() => void) | null = null
+
     const showTarget = () => {
       if (cancelled) return
-      if (i >= targets.length) return finish()
+      if (i >= targets.length) return EYE.calHeadTurn ? headTurnStage() : finish()
       setIndex(i)
       setSampling(false)
       window_ = []
@@ -116,14 +151,26 @@ export function EyeCalibration() {
       clearTimeout(kick)
       clearTimeout(timer)
       cancelAnimationFrame(raf)
+      cleanupExtra?.()
       window.removeEventListener('keydown', onKey, true)
       setIndex(0)
       setSampling(false)
+      setHeadTurn(false)
     }
   }, [calibrating, targets, setCalibrating, setResult])
 
+  // The saccade drill (dev recorder): the same ring, stepped by the shell's
+  // __eyeDrill; the gaze pointer keeps running - the clip is what matters.
+  if (!calibrating && drill) {
+    return (
+      <div className="eye-cal" aria-hidden="true">
+        <div className="eye-cal-target" data-sampling="0" style={{ transform: `translate(${drill.x}px, ${drill.y}px)` }} />
+        <div className="eye-cal-note">Saccade drill · follow the ring with your eyes only · recording</div>
+      </div>
+    )
+  }
   if (!calibrating) return null
-  const t = targets[index] ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+  const t = headTurn ? targets[0] : (targets[index] ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 })
   return (
     <div className="eye-cal" aria-hidden="true">
       <div
@@ -132,7 +179,9 @@ export function EyeCalibration() {
         style={{ transform: `translate(${t.x}px, ${t.y}px)` }}
       />
       <div className="eye-cal-note">
-        Look at the ring · {index + 1} / {targets.length || 5} · ESC cancels
+        {headTurn
+          ? 'Keep your eyes on the ring · slowly turn your head left, then right · ESC cancels'
+          : `Look at the ring · ${index + 1} / ${targets.length || 5} · ESC cancels`}
       </div>
     </div>
   )
