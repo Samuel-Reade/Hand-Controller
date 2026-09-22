@@ -71,6 +71,43 @@ export interface NeuralConfig {
     blazeSpread: number
     spikeAbove: number
     spikeScale: number
+    // The light pipeline (lighting pass, 2026-09-21; postfx.ts). The scene
+    // draws into a half-float target, so overlapping additive glow
+    // ACCUMULATES past 1.0 instead of clipping to flat white; a bloom pass
+    // spreads only what is hot; Neutral tone mapping (identity below 0.8)
+    // then rolls only the hot accumulations off toward white. exposure
+    // scales the frame before that - 1 = P0 parity for everything not hot.
+    // Samples in the scene target. 0: the trails carry their own hairline
+    // (trail.minRadiusPx) so nothing needs coverage. 4 cost 60 -> 24 fps at
+    // retina scale on the additive fill (measured 2026-09-21); 2 -> 31.
+    msaa: number
+    bloomEnabled: boolean
+    bloomStrength: number   // how much of the hot pass is added back
+    bloomRadius: number     // 0..1 - how far the hot light spreads
+    bloomThreshold: number  // linear luminance a pixel must exceed to bloom (1 = over-white only)
+    bloomKnee: number       // threshold softness, so a pulsing halo never pops in and out
+    exposure: number
+    // Glare (replaces the corona's linear ramp, which read as a soft disc
+    // with an edge at any zoom): a tight gaussian at the disc edge and a
+    // long faint Lorentzian tail - bright where the star's light is,
+    // fading the way real glare does. The bloom pass adds the wide spread.
+    glareTight: number      // peak alpha x halo, at the disc edge
+    glareSigma: number      // gaussian width, in disc radii
+    glareTail: number       // tail alpha x halo
+    glareTailRadius: number // where the tail is at half strength, in disc radii
+    // Node bodies (2026-09-21): a body, not a sticker. Limb darkening - a
+    // self-luminous sphere is brightest face-on and dims toward its edge,
+    // I = I0 (1 - u (1 - mu)); the Sun's u is ~0.6 - and, once a node spans
+    // enough of the frame to see it, a faint surface mottle sampled ON the
+    // sphere, so it foreshortens at the limb. Brightness only: the hue is
+    // status (RALLY §5). Bokeh sprites (defocused light) get neither.
+    limbDarkening: number   // u above; 0 = the flat disc
+    surfaceAmp: number      // mottle depth as a fraction of body brightness
+    surfaceScale: number    // mottle cells across the disc
+    surfaceDrift: number    // rad/s the sphere turns; 0 = still (the momentum channel owns motion)
+    detailStart: number     // mottle fades in from this fraction of frame height the sprite spans...
+    detailEnd: number       // ...full here (disc ~ 0.3 of the sprite); the pinpoint fades out over the same span
+    pinMaxPx: number        // the white pinpoint's radius cap, device px (it scaled with the disc: a sticker up close)
   }
   depth: {
     rangeMult: number      // depth.range = ±rangeMult × R
@@ -117,6 +154,18 @@ export interface NeuralConfig {
     // 2026-09-10). The prototype's surface-to-surface rule (1) was built for
     // hard-edged discs; with luminous bodies it left a gap before the heart.
     endInset: number
+    // Lighting pass: the string still runs to the centre (endInset 0), but
+    // its alpha fades in over bodyFade x the visible disc radius at each end,
+    // so it emerges from under the body instead of painting a bar across it.
+    // At the brain, 47 spokes piling into one point was half the white smear.
+    // 0 = the old bar.
+    bodyFade: number
+    // Hairline (lighting pass): the tubes are sub-pixel at the rest view;
+    // rasterised without MSAA a pixel only counted when its centre fell
+    // inside one, and the strings broke into dim dots. A ring thinner than
+    // minRadiusPx on screen is widened to it and dimmed by the same ratio -
+    // the light MSAA coverage would have averaged, with no coverage cost.
+    minRadiusPx: number
     radByTier: Record<NeuralTier, number>
     radDefault: number
     // Energy flow (visual pass): a soft band of brightness travelling along
@@ -248,6 +297,24 @@ export const NCONF: NeuralConfig = {
     blazeSpread: 0.5,
     spikeAbove: 0.8,
     spikeScale: 0.45,
+    msaa: 0,
+    bloomEnabled: true,
+    bloomStrength: 0.4,
+    bloomRadius: 0.3,
+    bloomThreshold: 0.9,
+    bloomKnee: 0.2,
+    exposure: 1.0,
+    glareTight: 0.35,
+    glareSigma: 0.5,
+    glareTail: 0.08,
+    glareTailRadius: 1.5,
+    limbDarkening: 0.6,
+    surfaceAmp: 0.35,
+    surfaceScale: 6.0,
+    surfaceDrift: 0,
+    detailStart: 0.05,
+    detailEnd: 0.15,
+    pinMaxPx: 3,
   },
   depth: { rangeMult: 1.5, opacityFloor: 0.15, desatStrength: 0 },
   // Measured on the 160-post field (PORT_LOG): gamma 0.6 puts the median
@@ -264,6 +331,8 @@ export const NCONF: NeuralConfig = {
     pulseEnabled: true,
     beadsEnabled: false,
     endInset: 0,
+    bodyFade: 1.0,
+    minRadiusPx: 0.6,
     // brain 1.8 -> 1.2: with 160 spokes the P0 thickness (sized for 20) is
     // the starburst; a popular post's spoke is still the thickest line drawn.
     radByTier: { brain: 1.2, hub: 1.1, node: 0.65, sub: 0.35, terminal: 0.3 },

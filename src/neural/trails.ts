@@ -44,6 +44,9 @@ export interface TrailSpec {
   childMomentum: number
   /** brightness x (and half the radius scaling) by the child's traction: spokeMinWeight..1 */
   weight: number
+  /** visible disc radius (wu) at each end - the string fades in under the body (trail.bodyFade); absent = no fade */
+  parentDiscR?: number
+  childDiscR?: number
 }
 
 const UP = new Vector3(0, 1, 0)
@@ -109,6 +112,8 @@ export function buildTrailSpecs(
       childName: n.name,
       childMomentum: momentumFor(n.name),
       weight,
+      parentDiscR: discR(parent),
+      childDiscR: discR(n),
     })
   }
   return specs
@@ -172,6 +177,10 @@ export function buildTrailGeometry(
   const colors = new Float32Array(specs.length * vertsPerTrail * 3)
   // (t along the trail, per-trail phase, child momentum, traction weight)
   const flow = new Float32Array(specs.length * vertsPerTrail * 4)
+  // (fade-in span from the parent end, fade-out span at the child end) in t
+  const fade = new Float32Array(specs.length * vertsPerTrail * 2)
+  // the ring's centre, so the vertex shader knows the arm it can widen
+  const axis = new Float32Array(specs.length * vertsPerTrail * 3)
   const indices = new Uint32Array(specs.length * idxPerTrail)
 
   const center = new Vector3()
@@ -190,6 +199,15 @@ export function buildTrailGeometry(
     // deterministic golden-ratio stagger per trail (no RNG)
     const phase = (si * 0.6180339887) % 1
     si++
+    // Body fade: the disc radius as a fraction of the chord (the bend is 10%,
+    // so the chord is the length to within a few %), capped so a short
+    // string between two big bodies still shows its middle; floored so the
+    // shader's smoothstep never sees equal edges.
+    const len = Math.max(1, spec.pSurf.distanceTo(spec.cSurf))
+    const fadeSpan = (discR: number | undefined) =>
+      Math.max(1e-4, Math.min(0.45, ((discR ?? 0) * cfg.trail.bodyFade) / len))
+    const fadeIn = fadeSpan(spec.parentDiscR)
+    const fadeOut = fadeSpan(spec.childDiscR)
 
     // Initial frame: normal = least-aligned axis projected off the tangent.
     bezierTangent(tangent, spec.pSurf, spec.ctrl, spec.cSurf, 0)
@@ -229,6 +247,11 @@ export function buildTrailGeometry(
         flow[vOff * 4 + 1] = phase
         flow[vOff * 4 + 2] = spec.childMomentum
         flow[vOff * 4 + 3] = spec.weight
+        fade[vOff * 2] = fadeIn
+        fade[vOff * 2 + 1] = fadeOut
+        axis[vi] = center.x
+        axis[vi + 1] = center.y
+        axis[vi + 2] = center.z
         vOff++
       }
     }
@@ -251,6 +274,8 @@ export function buildTrailGeometry(
   geo.setAttribute('position', new BufferAttribute(positions, 3))
   geo.setAttribute('color', new BufferAttribute(colors, 3))
   geo.setAttribute('aFlow', new BufferAttribute(flow, 4))
+  geo.setAttribute('aFade', new BufferAttribute(fade, 2))
+  geo.setAttribute('aAxis', new BufferAttribute(axis, 3))
   geo.setIndex(new BufferAttribute(indices, 1))
   return geo
 }
@@ -259,18 +284,35 @@ const TRAIL_VERT = /* glsl */ `
   uniform float uR;
   uniform float uRangeMult;
   uniform float uFloor;
+  uniform float uViewportH;   // drawing-buffer height, px
+  uniform float uTanHalfFov;
+  uniform float uMinRadiusPx;
   attribute vec4 aFlow;
+  attribute vec2 aFade;
+  attribute vec3 aAxis;
   varying vec3 vColor;
   varying float vDepth;
   varying vec4 vFlow;
+  varying vec2 vFade;
   void main() {
     vColor = color;
     vFlow = aFlow;
-    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vFade = aFade;
+    // Hairline (trail.minRadiusPx): a ring thinner than the minimum on
+    // screen is widened along its arm to the minimum and its light scaled
+    // down by the same ratio - the coverage MSAA averaged, at no fill cost.
+    vec3 arm = position - aAxis;
+    float r = length(arm);
+    vec4 mvAxis = modelViewMatrix * vec4(aAxis, 1.0);
+    float pxPerWu = uViewportH / (2.0 * uTanHalfFov * max(1.0, -mvAxis.z));
+    float rPx = max(1e-4, r * pxPerWu);
+    float widen = max(1.0, uMinRadiusPx / rPx);
+    vec3 p = aAxis + arm * widen;
+    vec4 wp = modelMatrix * vec4(p, 1.0);
     float range = uR * uRangeMult;
     float zn = clamp((wp.z + range) / (2.0 * range), 0.0, 1.0);
     float ss = zn * zn * (3.0 - 2.0 * zn);
-    vDepth = uFloor + (1.0 - uFloor) * ss; // same zNorm curve as the stars
+    vDepth = (uFloor + (1.0 - uFloor) * ss) / widen; // same zNorm curve as the stars, x coverage
     gl_Position = projectionMatrix * viewMatrix * wp;
   }
 `
@@ -285,6 +327,7 @@ const TRAIL_FRAG = /* glsl */ `
   varying vec3 vColor;
   varying float vDepth;
   varying vec4 vFlow;
+  varying vec2 vFade;
   void main() {
     // Energy flow: a soft band travelling along the trail, staggered per
     // trail. t runs parent (0) -> child (1); dir = -1 (uFlowInward) moves the
@@ -302,7 +345,11 @@ const TRAIL_FRAG = /* glsl */ `
     // Traction sets the BASE (vFlow.w: hairline for a minor post, full for a
     // popular one); the momentum band adds at full strength regardless, so a
     // small post that starts moving still shows its comet-tail.
-    gl_FragColor = vec4(vColor * (vFlow.w + flow), uOpacity * vDepth);
+    // Body fade (lighting pass): the string emerges from under each body
+    // instead of painting a bar across it - in over the parent's disc,
+    // out over the child's (trail.bodyFade x disc radius, in t).
+    float body = smoothstep(0.0, vFade.x, vFlow.x) * (1.0 - smoothstep(1.0 - vFade.y, 1.0, vFlow.x));
+    gl_FragColor = vec4(vColor * (vFlow.w + flow), uOpacity * vDepth * body);
     #include <colorspace_fragment>
   }
 `
@@ -322,6 +369,9 @@ export function createTrailMaterial(pass: 'core' | 'glow'): ShaderMaterial {
       uFlowPeriod: { value: NCONF.trail.flowPeriod },
       uFlowInward: { value: NCONF.trail.flowInward ? 1 : 0 },
       uFlowRateBoost: { value: NCONF.momentum.pulseRateBoost },
+      uViewportH: { value: 900 }, // set per frame from the drawing buffer
+      uTanHalfFov: { value: Math.tan((NCONF.camera.fov * Math.PI) / 360) },
+      uMinRadiusPx: { value: NCONF.trail.minRadiusPx },
     },
     vertexColors: true,
     transparent: true,
@@ -332,9 +382,16 @@ export function createTrailMaterial(pass: 'core' | 'glow'): ShaderMaterial {
   })
 }
 
-export function syncTrailUniforms(core: ShaderMaterial, glow: ShaderMaterial, timeSec = 0): void {
+/**
+ * Refresh the live-tunable uniforms from NCONF - call once per frame.
+ * `viewportH` is the drawing-buffer height in device px (the hairline's
+ * pixel scale); omit it and the last value stands.
+ */
+export function syncTrailUniforms(core: ShaderMaterial, glow: ShaderMaterial, timeSec = 0, viewportH?: number): void {
   const gain = NCONF.trail.flowEnabled ? NCONF.trail.flowGain : 0
   for (const m of [core, glow]) {
+    if (viewportH !== undefined) m.uniforms.uViewportH.value = viewportH
+    m.uniforms.uMinRadiusPx.value = NCONF.trail.minRadiusPx
     m.uniforms.uR.value = NCONF.generation.R
     m.uniforms.uRangeMult.value = NCONF.depth.rangeMult
     m.uniforms.uFloor.value = NCONF.depth.opacityFloor

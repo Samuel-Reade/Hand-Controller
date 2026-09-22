@@ -1236,3 +1236,99 @@ scroll mechanics. Scroll up is zoom and scroll down is zoom out."
   which a wheel never sends. The physics and the gaze arbitration ignore
   `scrollZoom`. Suspended while the shell is open (S2).
 - Neural scene only; `?scene=globe` stays zoom-less.
+
+## Lighting pass (2026-09-21, user direction)
+Brief (user): "how can we make the nodes look better and more realistic?" -
+recommendations made from screenshots (rest, 0.45x, 3x, a hub close-up, a
+clicked node, 6x); the user took the lighting step first.
+- **What was wrong**: every glow layer is additive and the frame clipped at
+  1.0 per channel, so wherever glows overlapped the colour maxed out to flat
+  white - the brain was a white smear, hubs at 3x were white stickers, a
+  clicked node at 6x a flat cyan disc. The corona was a linear ramp with an
+  edge, so it read as a soft disc at any zoom; 47 spokes piled into the
+  brain's centre.
+- **The pipeline** (src/neural/postfx.ts): the scene renders into a
+  half-float target (additive light ACCUMULATES past 1.0), a bloom pass
+  spreads only what is hot (threshold 0.9 linear, soft knee, at half the
+  frame size), the output pass tone-maps and encodes sRGB, grain rides last
+  in the darks only. Nothing converts twice: three makes
+  `colorspace_fragment` a no-op inside a render target, so the P0 colours
+  come out of the output pass exactly as they came off the screen.
+- **Neutral, not AgX**: Neutral (Khronos PBR Neutral) is the identity below
+  0.8 and only compresses the hot accumulations toward white - P0 parity for
+  everything that is not hot. AgX was built first: it lifts and greys the
+  wash (~17% on the blue channel, worked through from its curve) and
+  re-renders every colour in the frame; the frame read foggy at rest.
+  Exposure 1.0.
+- **No MSAA in the target - the trails carry their own hairline.** Without
+  multisampling a sub-pixel tube only counted where a pixel centre fell
+  inside it: the strings rasterised as dim dotted lines. Measured at retina
+  scale (2880x1800, headless Chromium on ANGLE Metal): 4 samples 24 fps, 2
+  samples 31, none 48 before the half-size bloom chain and 60 after. So the
+  trail vertex shader widens any ring thinner than `trail.minRadiusPx`
+  (0.6) to it and divides its light by the same ratio - the coverage MSAA
+  averaged, at no fill cost. `render.msaa` stays on a slider (0/2/4).
+- **Glare, not corona** (starField.ts): a tight gaussian at the disc edge
+  (glareTight 0.35, sigma 0.5 disc radii) plus a long faint Lorentzian
+  tail (0.08, half at 1.5 radii), windowed softly at the quad edge - bright
+  where the star's light is, fading the way glare does. Bokeh sprites get
+  none: defocused light has no glare (the peak at their huge disc edge drew
+  a bright rim at 3x).
+- **Body fade** (trails.ts): the string still runs to the centre (endInset
+  0, ruling kept) but its alpha fades in over `trail.bodyFade` (1.0) x the
+  visible disc radius at each end, so it emerges from under the body
+  instead of painting a bar across it; at the brain the pile-up was half
+  the smear.
+- Grain moved to a pass after tone mapping (in the linear target, 3% noise
+  on black came out as sparkle) and is masked out of the highlights: grain
+  lives in the shadows of a photograph, never on a light source.
+- The gate's draw-call number stays the SCENE's: a counting pass records
+  the calls right after the render pass (the bloom's own quads excluded).
+- Measured: centre white-clip 1.28% (the prototype bound) -> 0.00%; 7x
+  median 17.6 -> 12.9/255; rest 6.6/255; 60 fps at 1x and at retina.
+- Not this pass (recommendations 3-7, still open): sphere-shaded bodies
+  with surface detail up close, filament-shaded lines with a screen-space
+  width cap, occlusion, dendrite-style trunk grouping of the spokes, a
+  backdrop that scales with the system, distant dust. The ten bokeh
+  sprites still read as fog at 3x (blur by distance from the focused node,
+  or drop them).
+
+## Node bodies (2026-09-21, user direction)
+Brief (user): "do node bodies" - recommendation 3 from the lighting review:
+up close every node was a flat disc.
+- **What the flat disc actually was: the white PINPOINT.** Its radius is
+  DR x (0.22 + 0.16 rallies) - the >= 1 px guarantee for far, tiny posts -
+  but it scaled with the disc, so at 6-12x it was a flat white sticker over
+  22-38% of every body, immune to any shading underneath. Found by
+  elimination: at exposure 0.3 with limb darkening and mottle at maximum
+  and the heart off, the disc did not change; the centred node's visible
+  radius at 12x is 352 px and the sticker was 140. Now capped at
+  `render.pinMaxPx` (3 device px) and faded out as the body resolves (the
+  detail span): a resolved disc has no unresolved image. From afar nothing
+  changes; hubs at rest trade their hard white dot for the soft white-hot
+  heart.
+- **Limb darkening** on the WHOLE body layer, heart included: a
+  self-luminous sphere is brightest face-on and dims toward its edge,
+  I = I0 (1 - u (1 - mu)), the Sun's u ~ 0.6 - squared, because the tone
+  mapper flattens anything above 0.8. Applied to the body colour alone it
+  hid under the heart of every popular post.
+- **Surface mottle**: three octaves of value noise sampled ON the sphere
+  (X, Y, mu), so it wraps and foreshortens at the limb; brightness only -
+  the hue is status (RALLY §5); fades in from `detailStart` to `detailEnd`
+  of the frame height the sprite spans (discs ~13-40 px), so from afar a
+  node is still a pinpoint and nothing aliases. `surfaceDrift` turns the
+  sphere (rad/s) and defaults to 0: the momentum channel owns motion on a
+  node; the slider is there for the demo. `surfaceScale` 6 cells across
+  the disc (3 read as one gradient on a 700 px disc).
+- Bokeh sprites get neither: defocused light has no limb and no surface.
+- **Glare is annular again.** The lighting pass's glare used
+  max(0, r - dr), which is zero across the whole disc interior, so the
+  tight peak painted every body with light (the corona it replaced started
+  at 1.2 dr). Masked to rise through the disc's soft edge.
+- Cost: 60 fps at rest, 6x and 12x, at 1x and retina scale, shading on or
+  off (a capture's HUD reads 19-21 during the screenshot stall; that is
+  not the frame rate). Gate 7/7 unchanged: white-clip 0.00%, 7x median
+  12.9/255.
+- Still open from the review: filament-shaded lines with a width cap (4),
+  occlusion - the strings still cross the bodies (6), trunk grouping (5),
+  the backdrop and dust (7), the bokeh fog at 3x.

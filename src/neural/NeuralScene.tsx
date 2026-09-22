@@ -43,6 +43,7 @@ import type { Vec3 } from '../orb/geometry'
 import { applyInputEvent, orbRuntime, stepPhysics } from '../orb/useOrbPhysics'
 import { useStore } from '../store'
 import { DISC_FRACTION, NCONF, generationTuple, ringRadiusPx, tupleHash } from './config'
+import { createLightPipeline } from './postfx'
 import {
   centerRuntime,
   createCenterState,
@@ -192,18 +193,8 @@ const WARM_FRAG = /* glsl */ `
     #include <colorspace_fragment>
   }
 `
-const GRAIN_VERT = /* glsl */ `
-  void main() {
-    gl_Position = vec4(position.xy, 0.0, 1.0);
-  }
-`
-const GRAIN_FRAG = /* glsl */ `
-  uniform float uAmount;
-  void main() {
-    float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-    gl_FragColor = vec4(vec3(n), uAmount);
-  }
-`
+// Grain moved to the light pipeline (postfx.ts): it has to ride AFTER tone
+// mapping - in the linear target, 3% noise on black came out as sparkle.
 
 function envMesh(frag: string, w: number, h: number): Mesh {
   const mat = new ShaderMaterial({
@@ -394,6 +385,19 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     if (import.meta.env.DEV) window.__nconf = NCONF
   }, [gl])
 
+  // The light pipeline (postfx.ts) owns the frame: a priority-1 subscriber
+  // runs after the scene step below and takes rendering off R3F's hands.
+  const scene = useThree((s) => s.scene)
+  const camera = useThree((s) => s.camera)
+  const size = useThree((s) => s.size)
+  const dpr = useThree((s) => s.viewport.dpr)
+  const light = useMemo(() => createLightPipeline(gl, scene, camera), [gl, scene, camera])
+  useEffect(() => () => light.dispose(), [light])
+  useEffect(() => {
+    light.setSize(size.width, size.height, dpr)
+  }, [light, size, dpr])
+  useFrame((_, delta) => light.render(delta), 1)
+
   const rebuildSlider = (
     get: () => number,
     set: (v: number) => void,
@@ -564,6 +568,36 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     grainAmount: slider(() => NCONF.render.grainAmount, (v) => { NCONF.render.grainAmount = v }, 0, 0.1, 0.005),
   })
 
+  // Lighting pass: the pipeline, the glare profile and the body fade (the
+  // fade is baked into the trail geometry, so its slider rebuilds).
+  useControls('neural light', {
+    bloomEnabled: {
+      value: NCONF.render.bloomEnabled,
+      onChange: (v: boolean) => { NCONF.render.bloomEnabled = v },
+    },
+    bloomStrength: slider(() => NCONF.render.bloomStrength, (v) => { NCONF.render.bloomStrength = v }, 0, 2, 0.05),
+    bloomRadius: slider(() => NCONF.render.bloomRadius, (v) => { NCONF.render.bloomRadius = v }, 0, 1, 0.05),
+    bloomThreshold: slider(() => NCONF.render.bloomThreshold, (v) => { NCONF.render.bloomThreshold = v }, 0, 2, 0.05),
+    bloomKnee: slider(() => NCONF.render.bloomKnee, (v) => { NCONF.render.bloomKnee = v }, 0.01, 1, 0.01),
+    exposure: slider(() => NCONF.render.exposure, (v) => { NCONF.render.exposure = v }, 0.2, 3, 0.05),
+    glareTight: slider(() => NCONF.render.glareTight, (v) => { NCONF.render.glareTight = v }, 0, 1, 0.01),
+    glareSigma: slider(() => NCONF.render.glareSigma, (v) => { NCONF.render.glareSigma = v }, 0.1, 3, 0.05),
+    glareTail: slider(() => NCONF.render.glareTail, (v) => { NCONF.render.glareTail = v }, 0, 0.5, 0.01),
+    glareTailRadius: slider(() => NCONF.render.glareTailRadius, (v) => { NCONF.render.glareTailRadius = v }, 0.2, 6, 0.1),
+    bodyFade: rebuildSlider(() => NCONF.trail.bodyFade, (v) => { NCONF.trail.bodyFade = v }, 0, 3, 0.1),
+  })
+
+  // Node bodies: limb darkening and the close-up surface mottle.
+  useControls('neural body', {
+    limbDarkening: slider(() => NCONF.render.limbDarkening, (v) => { NCONF.render.limbDarkening = v }, 0, 1, 0.01),
+    surfaceAmp: slider(() => NCONF.render.surfaceAmp, (v) => { NCONF.render.surfaceAmp = v }, 0, 1, 0.01),
+    surfaceScale: slider(() => NCONF.render.surfaceScale, (v) => { NCONF.render.surfaceScale = v }, 0.5, 12, 0.1),
+    surfaceDrift: slider(() => NCONF.render.surfaceDrift, (v) => { NCONF.render.surfaceDrift = v }, 0, 0.5, 0.005),
+    detailStart: slider(() => NCONF.render.detailStart, (v) => { NCONF.render.detailStart = v }, 0, 0.5, 0.005),
+    detailEnd: slider(() => NCONF.render.detailEnd, (v) => { NCONF.render.detailEnd = v }, 0.01, 1, 0.01),
+    pinMaxPx: slider(() => NCONF.render.pinMaxPx, (v) => { NCONF.render.pinMaxPx = v }, 1, 30, 0.5),
+  })
+
   const environment = useMemo(() => {
     const wash = envMesh(WASH_FRAG, 7000, 5000)
     wash.position.z = WASH_Z
@@ -571,20 +605,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     const warm = envMesh(WARM_FRAG, 2800, 2200)
     warm.position.set(-550, 350, WARM_Z)
     warm.renderOrder = -9
-    const grain = new Mesh(
-      new PlaneGeometry(2, 2),
-      new ShaderMaterial({
-        vertexShader: GRAIN_VERT,
-        fragmentShader: GRAIN_FRAG,
-        uniforms: { uAmount: { value: NCONF.render.grainAmount } },
-        transparent: true,
-        depthWrite: false,
-        depthTest: false,
-      }),
-    )
-    grain.renderOrder = 100
-    grain.frustumCulled = false
-    return { wash, warm, grain }
+    return { wash, warm }
   }, [])
 
   const built = useMemo(() => {
@@ -1111,10 +1132,12 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     const tSec = state.clock.elapsedTime
     syncStarUniforms(built.starMesh.material as ShaderMaterial, tSec)
     syncStarUniforms(built.beadMesh.material as ShaderMaterial)
+    const viewportH = state.size.height * state.viewport.dpr // hairline px scale
     syncTrailUniforms(
       built.trails.core.material as ShaderMaterial,
       built.trails.glow.material as ShaderMaterial,
       tSec,
+      viewportH,
     )
     syncPulseUniforms(built.pulseMesh.material as ShaderMaterial, tSec)
 
@@ -1142,13 +1165,12 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         d.reportTrails.core.material as ShaderMaterial,
         d.reportTrails.glow.material as ShaderMaterial,
         tSec,
+        viewportH,
       )
     }
 
     built.beadMesh.visible = NCONF.trail.beadsEnabled
     built.pulseMesh.visible = NCONF.trail.pulseEnabled
-    environment.grain.visible = NCONF.render.grainEnabled
-    ;(environment.grain.material as ShaderMaterial).uniforms.uAmount.value = NCONF.render.grainAmount
 
     // ── Crosshair pointing (ORB_SELECT_SPEC §3, PT1) ─────────────────────
     // Projection -> nearest targetable within tolerance -> hysteresis. The
@@ -1410,7 +1432,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       fs.windowStart = now
     }
     window.__neuralInfo = {
-      drawCalls: state.gl.info.render.calls,
+      drawCalls: light.sceneDrawCalls, // the scene's own, last frame (postfx.ts)
       fps: orbRuntime.fps,
       nodeCount: built.nodeCount,
       trailCount: built.trailCount,
@@ -1442,7 +1464,6 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     <>
       <primitive object={environment.wash} />
       <primitive object={environment.warm} />
-      <primitive object={environment.grain} />
       <group ref={offsetRef}>
         <group ref={tiltRef}>
           <group ref={spinRef}>

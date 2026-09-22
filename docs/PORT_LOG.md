@@ -997,3 +997,40 @@ Decisions: docs/DECISIONS.md ("Scroll to zoom").
   Shots: shots/scroll-zoom-in.png, shots/scroll-zoom-out.png. Run against
   the cached headless shell 1243: Playwright 1.62.1 wants 1234, which is
   not installed - `npx playwright install chromium` fixes every gate.
+
+# Lighting pass (2026-09-21)
+
+Decisions: docs/DECISIONS.md ("Lighting pass").
+- `neural/postfx.ts` (new): EffectComposer on a half-float target ->
+  count pass -> UnrealBloomPass (half the frame) -> OutputPass (Neutral)
+  -> grain ShaderPass (darks only); `sceneDrawCalls` for __neuralInfo.
+  `NeuralScene.tsx`: the pipeline owns the frame (priority-1 useFrame),
+  sized from R3F's size x dpr; the in-scene grain plane is gone; leva
+  'neural light' folder (bloom, exposure, glare, bodyFade). `config.ts`:
+  render.msaa / bloom* / exposure / glare*, trail.bodyFade / minRadiusPx.
+  `starField.ts`: glare replaces the corona ramp (uGlare), none on bokeh.
+  `trails.ts`: aFade (body fade), aAxis + the hairline widen in the vertex
+  shader, `syncTrailUniforms(..., viewportH)`.
+- Tests 259 (unchanged: no shader tests; the trail attribute tests pin
+  aFlow only). tsc + oxlint clean.
+- Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 7,
+  white-clip 0.00% (bound 1.28%), 7x median 12.9/255 (rest 6.6). Retina
+  probe (2880x1800): msaa 0 -> 60 fps, 2 -> 39-41, 4 -> 27-29. Shots:
+  shots/neural-p4.png, shots/neural-zoom7.png (refreshed). Run against the
+  cached headless shell 1243 (see the scroll-zoom entry).
+
+# Node bodies (2026-09-21)
+
+Decisions: docs/DECISIONS.md ("Node bodies").
+- `starField.ts`: limb darkening + sphere-sampled mottle on the whole body
+  layer (uLimb, uSurfaceAmp/Scale/Drift, uDetailStart/End -> vDetail from
+  the sprite's frame fraction; none on bokeh); the pinpoint capped at
+  uPinPx device px and faded by vDetail; the glare masked out of the disc
+  interior. `config.ts`: render.limbDarkening / surfaceAmp / surfaceScale /
+  surfaceDrift / detailStart / detailEnd / pinMaxPx. `NeuralScene.tsx`:
+  leva 'neural body' folder.
+- Tests 259 (no shader tests). tsc + oxlint clean.
+- Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 7,
+  white-clip 0.00%, 7x median 12.9/255. fps probe: 60 at rest / 6x / 12x,
+  1x and retina, shading on or off. Shots: shots/neural-p4.png,
+  shots/neural-zoom7.png (refreshed).

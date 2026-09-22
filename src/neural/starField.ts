@@ -18,6 +18,7 @@ import {
   PlaneGeometry,
   ShaderMaterial,
   Vector3,
+  Vector4,
 } from 'three'
 import { NCONF } from './config'
 import { HUE_INDEX, PAL, TIER_OPA, hexToRgb01 } from './palette'
@@ -57,6 +58,8 @@ const VERT = /* glsl */ `
   uniform float uTanHalfFov;
   uniform float uGlowFadeStart;
   uniform float uGlowFadeEnd;
+  uniform float uDetailStart;
+  uniform float uDetailEnd;
   uniform vec3 uBody[3];
   uniform vec3 uHalo[3];
   uniform vec3 uCore[3];
@@ -86,9 +89,12 @@ const VERT = /* glsl */ `
   varying float vMultBody;
   varying float vState;
   varying float vGlow;
+  varying float vBokeh;
+  varying float vDetail;
 
   void main() {
     vUv = position.xy; // unit quad corners at ±0.5; r=0 center
+    vBokeh = iBokeh;
     int h = int(iHue + 0.5);
     vBody = uBody[h];
     vHalo = uHalo[h];
@@ -135,6 +141,9 @@ const VERT = /* glsl */ `
     float frac = size / (2.0 * uTanHalfFov * max(1.0, -mv.z));
     float fade = 1.0 - smoothstep(uGlowFadeStart, uGlowFadeEnd, frac);
     vGlow = fade;
+    // Surface detail only once the body is big enough to show it - from
+    // afar a node is a pinpoint and the mottle would only alias.
+    vDetail = smoothstep(uDetailStart, uDetailEnd, frac) * (1.0 - iBokeh);
 
     mv.xy += position.xy * size; // view-space billboard
     gl_Position = projectionMatrix * mv;
@@ -160,8 +169,36 @@ const FRAG = /* glsl */ `
   varying float vMultBody;
   varying float vState;
   varying float vGlow;
+  varying float vBokeh;
+  varying float vDetail;
+  uniform float uTime;
+  uniform float uLimb;
+  uniform float uSurfaceAmp;
+  uniform float uSurfaceScale;
+  uniform float uSurfaceDrift;
+  uniform float uPinPx;
 
   const float DR = 0.15;
+
+  // Value noise for the surface mottle: three octaves, sampled at a point
+  // on the unit sphere so the pattern wraps and foreshortens at the limb.
+  float hash3(vec3 p) {
+    p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+  float vnoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash3(i), hash3(i + vec3(1, 0, 0)), f.x), mix(hash3(i + vec3(0, 1, 0)), hash3(i + vec3(1, 1, 0)), f.x), f.y),
+      mix(mix(hash3(i + vec3(0, 0, 1)), hash3(i + vec3(1, 0, 1)), f.x), mix(hash3(i + vec3(0, 1, 1)), hash3(i + vec3(1, 1, 1)), f.x), f.y),
+      f.z);
+  }
+  float fbm(vec3 p) {
+    return 0.5 * vnoise(p) + 0.3 * vnoise(p * 2.03) + 0.2 * vnoise(p * 4.07);
+  }
 
   // Canvas source-over compositing - the prototype painted the four layers
   // onto one texture; reproduce the stacking exactly.
@@ -173,6 +210,7 @@ const FRAG = /* glsl */ `
 
   uniform float uPinOnly;
   uniform float uAnchor;
+  uniform vec4 uGlare; // (tight peak, sigma, tail, tail radius) - config.render.glare*
   uniform float uSpikeLen;
   uniform float uSpikeAbove;
   uniform float uSpikeScale;
@@ -190,12 +228,22 @@ const FRAG = /* glsl */ `
       return;
     }
 
-    // 1. corona: annular gradient inner DR×1.2 → outer 0.49,
-    //    stops 0.0→halo×0.28, 0.4→halo×0.10, 1.0→0 (linear between)
-    float tc = clamp((r - dr * 1.2) / (0.49 - dr * 1.2), 0.0, 1.0);
-    float aCor = vOpa.x * (tc < 0.4 ? mix(0.28, 0.10, tc / 0.4)
-                                    : mix(0.10, 0.0, (tc - 0.4) / 0.6));
-    aCor *= 1.0 - smoothstep(0.49 - px, 0.49, r); // canvas fill circle bound
+    // 1. glare (lighting pass; replaces the corona's linear ramp, which read
+    //    as a soft disc with an edge at any zoom): a tight gaussian at the
+    //    disc edge plus a long faint Lorentzian tail - bright where the
+    //    star's light is, fading the way real glare does - windowed softly
+    //    at the quad edge. The bloom pass adds the wide spread, hot only.
+    //    A bokeh sprite is defocused light - it has no glare (the peak at
+    //    its huge disc edge drew a bright rim at 3x).
+    //    Outside the disc only - like the corona it replaces (annular from
+    //    1.2 dr): glare over the disc interior filled every body with light
+    //    and the tone mapper flattened it to a white sticker.
+    float q = max(0.0, r - dr) / dr; // distance outside the disc, in disc radii
+    float glare = (1.0 - vBokeh) * (uGlare.x * exp(-(q * q) / (2.0 * uGlare.y * uGlare.y))
+                                  + uGlare.z / (1.0 + (q * q) / (uGlare.w * uGlare.w)));
+    glare *= smoothstep(0.6, 1.0, r / dr); // rises through the disc's soft edge
+    float aCor = vOpa.x * min(1.0, glare);
+    aCor *= 1.0 - smoothstep(0.38, 0.49, r); // quad window, no cut
     aCor *= vGlow * vBlaze; // zoom fade x blaze (vertex)
     vec4 col = vec4(vHalo, aCor);
 
@@ -224,10 +272,36 @@ const FRAG = /* glsl */ `
     vec4 body = vec4(bodyCol, aBody);
     body = srcOver(vec4(mix(vBody, vCore, heat), min(1.0, aHeart)), body);
 
-    // 4. white pinpoint: radius max(DR×0.22, 1px) - the >= 1 px guarantee for
-    //    far, tiny posts; a little larger on big shouts
-    float pinR = max(dr * (0.22 + 0.16 * vRallies), px);
-    float aPin = min(1.0, vOpa.z * 0.85) * (1.0 - smoothstep(pinR - px, pinR, r));
+    // 3b. a body, not a sticker (node-bodies pass), shading the WHOLE body
+    //     layer, heart included - under the heart alone a popular post is a
+    //     flat white disc. Limb darkening: a self-luminous sphere is
+    //     brightest face-on and dims toward its edge, I = I0 (1 - u (1 - mu)),
+    //     squared here because the tone mapper flattens anything above 0.8.
+    //     Close enough to see it, a surface mottle sampled ON the sphere
+    //     (X, Y, mu) so it wraps and foreshortens at the limb, turning at
+    //     uSurfaceDrift (0 = still). Brightness only: the hue is status.
+    //     Not on bokeh (defocused light).
+    float xs = min(x, 1.0);
+    float mu = sqrt(max(0.0, 1.0 - xs * xs));
+    float limb = 1.0 - uLimb * (1.0 - mu);
+    float shade = mix(1.0, limb * limb, 1.0 - vBokeh);
+    if (vDetail > 0.001) {
+      float a = uTime * uSurfaceDrift;
+      vec3 sp = vec3(vUv / dr, mu);
+      sp = vec3(sp.x * cos(a) - sp.z * sin(a), sp.y, sp.x * sin(a) + sp.z * cos(a));
+      float n = fbm(sp * uSurfaceScale) - 0.5;
+      shade *= 1.0 + uSurfaceAmp * vDetail * n * mu;
+    }
+    body.rgb *= shade;
+
+    // 4. white pinpoint - the star's unresolved image: max(DR×0.22, 1px), the
+    //    >= 1 px guarantee for far, tiny posts, a little larger on big
+    //    shouts. Node-bodies pass: capped at uPinPx device px and gone once
+    //    the body resolves (vDetail) - scaling with the disc it was a flat
+    //    white sticker over 22-38% of every close-up. The heart carries the
+    //    centre from there.
+    float pinR = clamp(dr * (0.22 + 0.16 * vRallies), px, px * uPinPx);
+    float aPin = min(1.0, vOpa.z * 0.85) * (1.0 - smoothstep(pinR - px, pinR, r)) * (1.0 - vDetail);
     body = srcOver(vec4(1.0, 1.0, 1.0, aPin), body);
 
     // Spikes: the anchor's §6 dominance cross at full length; posts above
@@ -295,6 +369,7 @@ export function createStarMaterial(): ShaderMaterial {
       uPinOnly: { value: 0 }, // 1 = junction-bead mode: white dot only (§4.3)
       uAnchor: { value: 0 },   // 1 = anchor-role dominance treatment (§6)
       uCoronaMult: { value: 1 },
+      uGlare: { value: new Vector4() }, // filled by syncStarUniforms
       uSpikeLen: { value: NCONF.anchor.spikeLength },
       uTime: { value: 0 },
       uMomentumGlow: { value: NCONF.momentum.glow },
@@ -303,6 +378,13 @@ export function createStarMaterial(): ShaderMaterial {
       uTanHalfFov: { value: Math.tan((NCONF.camera.fov * Math.PI) / 360) },
       uGlowFadeStart: { value: NCONF.render.glowFadeStart },
       uGlowFadeEnd: { value: NCONF.render.glowFadeEnd },
+      uDetailStart: { value: NCONF.render.detailStart },
+      uDetailEnd: { value: NCONF.render.detailEnd },
+      uLimb: { value: NCONF.render.limbDarkening },
+      uSurfaceAmp: { value: NCONF.render.surfaceAmp },
+      uSurfaceScale: { value: NCONF.render.surfaceScale },
+      uSurfaceDrift: { value: NCONF.render.surfaceDrift },
+      uPinPx: { value: NCONF.render.pinMaxPx },
       uBody: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].body)).flat() },
       uHalo: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].halo)).flat() },
       uCore: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].core)).flat() },
@@ -349,6 +431,20 @@ export function syncStarUniforms(mat: ShaderMaterial, timeSec?: number): void {
   mat.uniforms.uCoreRim.value = NCONF.render.coreRim
   mat.uniforms.uSpikeAbove.value = NCONF.render.spikeAbove
   mat.uniforms.uSpikeScale.value = NCONF.render.spikeScale
+  mat.uniforms.uDetailStart.value = NCONF.render.detailStart
+  mat.uniforms.uDetailEnd.value = Math.max(NCONF.render.detailStart + 0.01, NCONF.render.detailEnd)
+  mat.uniforms.uLimb.value = NCONF.render.limbDarkening
+  mat.uniforms.uSurfaceAmp.value = NCONF.render.surfaceAmp
+  mat.uniforms.uSurfaceScale.value = Math.max(0.1, NCONF.render.surfaceScale)
+  mat.uniforms.uSurfaceDrift.value = NCONF.render.surfaceDrift
+  mat.uniforms.uPinPx.value = Math.max(1, NCONF.render.pinMaxPx) // clamp needs lo <= hi
+  // widths floored so the sliders can never divide the glare by zero
+  ;(mat.uniforms.uGlare.value as Vector4).set(
+    NCONF.render.glareTight,
+    Math.max(0.05, NCONF.render.glareSigma),
+    NCONF.render.glareTail,
+    Math.max(0.05, NCONF.render.glareTailRadius),
+  )
   // blaze/spread are per-material so the anchor can opt out (see NeuralScene)
   if (mat.uniforms.uBlaze.value !== 0) mat.uniforms.uBlaze.value = NCONF.render.blaze
   if (mat.uniforms.uBlazeSpread.value !== 0) mat.uniforms.uBlazeSpread.value = NCONF.render.blazeSpread
