@@ -15,6 +15,7 @@ import {
   InstancedBufferAttribute,
   InstancedBufferGeometry,
   Mesh,
+  NoBlending,
   PlaneGeometry,
   ShaderMaterial,
   Vector3,
@@ -351,6 +352,50 @@ const FRAG = /* glsl */ `
   }
 `
 
+// Depth twin (scoped occlusion, 2026-09-21): the solid disc writes depth and
+// nothing else. The glow around a body stays additive and hides nothing;
+// bokeh (defocused light) and junction beads hide nothing.
+const DEPTH_FRAG = /* glsl */ `
+  uniform float uPinOnly;
+  uniform float uOccludeEdge;
+  varying vec2 vUv;
+  varying float vCorona;
+  varying float vBokeh;
+  const float DR = 0.15;
+  void main() {
+    float r = length(vUv);
+    float dr = DR / vCorona;
+    if (vBokeh > 0.5 || uPinOnly > 0.5 || r > dr * uOccludeEdge) discard;
+    gl_FragColor = vec4(0.0);
+  }
+`
+
+/**
+ * Scoped occlusion: a depth twin of a star mesh - the same geometry and the
+ * SAME uniform objects (one sync serves both, and the anchor's settings
+ * carry over), drawing only depth for the solid disc (x < occludeEdge, the
+ * opaque part, so the cut it makes in what is behind is never seen). Give
+ * it a renderOrder after what the bodies must not hide and before what they
+ * must: bodies never hide bodies, only the lines; the brain hides both.
+ */
+export function createDepthTwin(visible: Mesh): Mesh {
+  const src = visible.material as ShaderMaterial
+  const mat = new ShaderMaterial({
+    vertexShader: VERT,
+    fragmentShader: DEPTH_FRAG,
+    uniforms: src.uniforms,
+    transparent: true, // sorted with the additive passes by renderOrder
+    colorWrite: false,
+    depthWrite: true,
+    depthTest: true,
+    blending: NoBlending,
+    side: DoubleSide,
+  })
+  const mesh = new Mesh(visible.geometry, mat)
+  mesh.frustumCulled = false
+  return mesh
+}
+
 export function createStarMaterial(): ShaderMaterial {
   return new ShaderMaterial({
     vertexShader: VERT,
@@ -385,6 +430,7 @@ export function createStarMaterial(): ShaderMaterial {
       uSurfaceScale: { value: NCONF.render.surfaceScale },
       uSurfaceDrift: { value: NCONF.render.surfaceDrift },
       uPinPx: { value: NCONF.render.pinMaxPx },
+      uOccludeEdge: { value: NCONF.render.occludeEdge }, // the depth twin's disc (createDepthTwin)
       uBody: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].body)).flat() },
       uHalo: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].halo)).flat() },
       uCore: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].core)).flat() },
@@ -438,6 +484,7 @@ export function syncStarUniforms(mat: ShaderMaterial, timeSec?: number): void {
   mat.uniforms.uSurfaceScale.value = Math.max(0.1, NCONF.render.surfaceScale)
   mat.uniforms.uSurfaceDrift.value = NCONF.render.surfaceDrift
   mat.uniforms.uPinPx.value = Math.max(1, NCONF.render.pinMaxPx) // clamp needs lo <= hi
+  mat.uniforms.uOccludeEdge.value = NCONF.render.occludeEdge
   // widths floored so the sliders can never divide the glare by zero
   ;(mat.uniforms.uGlare.value as Vector4).set(
     NCONF.render.glareTight,

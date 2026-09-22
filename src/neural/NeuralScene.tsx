@@ -81,7 +81,7 @@ import type { ViewSpec } from './pointing'
 import { buildPulseMesh, syncPulseUniforms } from './pulses'
 import { childShell, hubDirs, hubOrbitIndex, resolveLevel1, resolveReticle } from './selection'
 import type { ChildShellItem } from './selection'
-import { createStarMesh, syncStarUniforms } from './starField'
+import { createDepthTwin, createStarMesh, syncStarUniforms } from './starField'
 import type { StarInstance } from './starField'
 import { buildTrailMeshes, buildTrailSpecs, syncTrailUniforms } from './trails'
 import type { TrailSpec } from './trails'
@@ -354,6 +354,8 @@ interface DrillState {
   reportMesh: Mesh | null
   reportTrails: { core: Mesh; glow: Mesh } | null
   roleMesh: Mesh | null
+  /** the report nodes' depth twin (scoped occlusion): their lines hide behind them */
+  reportDepth: Mesh | null
   candidateHubInstance: number
   focusedItem: number
 }
@@ -596,6 +598,21 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     detailStart: slider(() => NCONF.render.detailStart, (v) => { NCONF.render.detailStart = v }, 0, 0.5, 0.005),
     detailEnd: slider(() => NCONF.render.detailEnd, (v) => { NCONF.render.detailEnd = v }, 0.01, 1, 0.01),
     pinMaxPx: slider(() => NCONF.render.pinMaxPx, (v) => { NCONF.render.pinMaxPx = v }, 1, 30, 0.5),
+    // scoped occlusion: bodies hide the lines behind them, the brain hides all
+    occlusion: {
+      value: NCONF.render.occlusion,
+      onChange: (v: boolean) => { NCONF.render.occlusion = v },
+    },
+    occludeEdge: slider(() => NCONF.render.occludeEdge, (v) => { NCONF.render.occludeEdge = v }, 0.3, 1.3, 0.01),
+  })
+
+  // Lines: the hairline floor, the width cap and the filament profile.
+  useControls('neural line', {
+    minRadiusPx: slider(() => NCONF.trail.minRadiusPx, (v) => { NCONF.trail.minRadiusPx = v }, 0.2, 3, 0.05),
+    maxRadiusPx: slider(() => NCONF.trail.maxRadiusPx, (v) => { NCONF.trail.maxRadiusPx = v }, 1, 40, 0.5),
+    filamentPow: slider(() => NCONF.trail.filamentPow, (v) => { NCONF.trail.filamentPow = v }, 0.5, 4, 0.05),
+    filamentGain: slider(() => NCONF.trail.filamentGain, (v) => { NCONF.trail.filamentGain = v }, 0.5, 3, 0.05),
+    filamentFromPx: slider(() => NCONF.trail.filamentFromPx, (v) => { NCONF.trail.filamentFromPx = v }, 0.5, 10, 0.25),
   })
 
   const environment = useMemo(() => {
@@ -639,7 +656,15 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       })
     }
     const starMesh = createStarMesh(instances)
-    starMesh.renderOrder = 1
+    // Scoped occlusion, in draw order: the brain's depth twin (-3), then the
+    // stars testing against it (-2: the brain hides the nodes behind it),
+    // then the nodes' twin (-1), then the lines, beads and pulses testing
+    // against both (0..3: bodies hide the lines behind them). Bodies never
+    // hide bodies - the nodes' twin draws after them. All additive, so the
+    // order changes nothing else.
+    starMesh.renderOrder = -2
+    const starDepth = createDepthTwin(starMesh)
+    starDepth.renderOrder = -1
 
     const brainMesh = createStarMesh([
       { pos: new Vector3(0, 0, 0), tier: 'brain', hue: 'violet', diam: NCONF.anchor.brainDiam, rallies: 1 },
@@ -651,6 +676,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     brainMat.uniforms.uBlaze.value = 0
     brainMat.uniforms.uBlazeSpread.value = 0
     brainMesh.renderOrder = 10
+    const brainDepth = createDepthTwin(brainMesh)
+    brainDepth.renderOrder = -3
 
     const specs = buildTrailSpecs(nodes, NCONF, (n) => diamByName.get(n.name)!, (n) => rallies.get(n.name) ?? 0)
     const trails = buildTrailMeshes(specs)
@@ -690,6 +717,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       trails,
       beadMesh,
       pulseMesh,
+      starDepth,
+      brainDepth,
       hubNodes,
       hubInstanceIndices,
       hubDirList: hd.dirs,
@@ -713,6 +742,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     reportMesh: null,
     reportTrails: null,
     roleMesh: null,
+    reportDepth: null,
     candidateHubInstance: -1,
     focusedItem: -1,
   })
@@ -870,7 +900,12 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       d.reportMesh = reportMesh
       d.reportTrails = reportTrails
       d.roleMesh = roleMesh
-      spinRef.current?.add(reportMesh, reportTrails.core, reportTrails.glow, roleMesh)
+      // the reports' lines hide behind the reports (twin at 3, lines at 4);
+      // the reports themselves never test depth - no body hides a body
+      const reportDepth = createDepthTwin(reportMesh)
+      reportDepth.renderOrder = 3
+      d.reportDepth = reportDepth
+      spinRef.current?.add(reportDepth, reportMesh, reportTrails.core, reportTrails.glow, roleMesh)
 
       // Walk the pitch detent ladder to the category latitude - the same
       // `step` vocabulary OrbitIndex uses; physics untouched.
@@ -1029,6 +1064,9 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       disposeMesh(built.trails.glow)
       disposeMesh(built.beadMesh)
       disposeMesh(built.pulseMesh)
+      // the twins share geometry and uniforms with the meshes above: material only
+      ;(built.starDepth.material as ShaderMaterial).dispose()
+      ;(built.brainDepth.material as ShaderMaterial).dispose()
     },
     [built],
   )
@@ -1068,6 +1106,9 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         disposeMesh(d.reportTrails.glow)
       }
       if (d.roleMesh) disposeMesh(d.roleMesh)
+      if (d.reportDepth) (d.reportDepth.material as ShaderMaterial).dispose() // shares the reports' geometry
+      d.reportDepth?.removeFromParent()
+      d.reportDepth = null
       d.reportMesh?.removeFromParent()
       d.reportTrails?.core.removeFromParent()
       d.reportTrails?.glow.removeFromParent()
@@ -1130,6 +1171,15 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     // Uniform sync (O(1) - no per-node JS). The clock drives the momentum
     // pulse and the trail energy bands in the shaders; beads stay still.
     const tSec = state.clock.elapsedTime
+    // Scoped occlusion: the twins write depth, these test against it. Off,
+    // nothing writes and nothing tests - the all-additive scene as it was.
+    const occ = NCONF.render.occlusion
+    built.starDepth.visible = occ
+    built.brainDepth.visible = occ
+    ;(built.starMesh.material as ShaderMaterial).depthTest = occ
+    for (const m of [built.trails.core, built.trails.glow, built.beadMesh, built.pulseMesh]) {
+      ;(m.material as ShaderMaterial).depthTest = occ
+    }
     syncStarUniforms(built.starMesh.material as ShaderMaterial, tSec)
     syncStarUniforms(built.beadMesh.material as ShaderMaterial)
     const viewportH = state.size.height * state.viewport.dpr // hairline px scale
@@ -1167,6 +1217,9 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
         tSec,
         viewportH,
       )
+      ;(d.reportTrails.core.material as ShaderMaterial).depthTest = occ
+      ;(d.reportTrails.glow.material as ShaderMaterial).depthTest = occ
+      if (d.reportDepth) d.reportDepth.visible = occ
     }
 
     built.beadMesh.visible = NCONF.trail.beadsEnabled
@@ -1467,11 +1520,13 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       <group ref={offsetRef}>
         <group ref={tiltRef}>
           <group ref={spinRef}>
+            <primitive object={built.brainDepth} />
+            <primitive object={built.starMesh} />
+            <primitive object={built.starDepth} />
             <primitive object={built.trails.core} />
             <primitive object={built.trails.glow} />
             <primitive object={built.beadMesh} />
             <primitive object={built.pulseMesh} />
-            <primitive object={built.starMesh} />
             <primitive object={built.brainMesh} />
           </group>
         </group>

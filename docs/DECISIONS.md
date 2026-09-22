@@ -1332,3 +1332,59 @@ up close every node was a flat disc.
 - Still open from the review: filament-shaded lines with a width cap (4),
   occlusion - the strings still cross the bodies (6), trunk grouping (5),
   the backdrop and dust (7), the bokeh fog at 3x.
+
+## Line shading (2026-09-21, user direction)
+Brief (user): "do line shading" - recommendation 4 from the lighting review:
+up close the strings were flat ribbons (at 12x a two-tone band ~90 px
+wide, the core tube plus the glow tube, each flat across).
+- **Filament profile** (trails.ts, fragment): across a tube wide enough
+  to show it, the light follows the chord through the cylinder,
+  sqrt(1 - (d/R)^2) with d the fragment's distance from the centreline
+  (from the interpolated view-space position and axis, so it is exact for
+  the five-facet tube) - bright down the middle, soft at the edges. Raised
+  to `filamentPow` (1.5) for a tighter core, x `filamentGain` (1.5) so the
+  profile keeps the ribbon's light (pi/4 of it at pow 1). Fades in from
+  `filamentFromPx` (2 px on-screen radius) to 3x that: under it the band
+  is a pixel or two, the profile stays off and the rest view is untouched.
+- **Width cap** (vertex): a ring wider than `maxRadiusPx` (6 device px,
+  core; x glowRadiusMult for the glow pass) is narrowed to it, the reverse
+  of the hairline's floor - a string is a filament at 12x, never a
+  highway. Not energy-conserving on purpose (a 30 px tube narrowed to 6
+  would burn white at 5x); the cap is floored at minRadiusPx so the two
+  never fight.
+- Leva 'neural line': minRadiusPx, maxRadiusPx, filamentPow/Gain/FromPx.
+- Gate 7/7: 7x median 12.9 -> 12.5/255, white-clip 0.00%, 60 fps.
+- Still open from the review: occlusion - the strings still cross the
+  bodies (6), trunk grouping (5), the backdrop and dust (7), the bokeh
+  fog at 3x.
+
+## Scoped occlusion (2026-09-21, user direction)
+Brief (user): "do scoped occlusion" - recommendation 6, scoped after the
+user asked whether occlusion would hide nodes at thousands of shouts.
+- **The scope**: node bodies hide the LINES behind them and the brain
+  hides the nodes and lines behind it; bodies never hide bodies. At
+  thousands of nodes no shout is lost to the one in front of it (and the
+  field rotates), while the visible fake - a filament running across a
+  globe - is gone. The full version is the same mechanism with the nodes'
+  twin drawn before the stars; not built.
+- **Mechanism** (starField.ts `createDepthTwin`): a depth twin of each
+  star mesh - the same geometry and the SAME uniform objects, so one sync
+  serves both and the anchor's settings carry over - draws nothing but
+  depth for the solid disc (x < `occludeEdge`, 0.85, inside the body's
+  opaque plateau, so the cut it makes in what is behind is never seen).
+  Glow, bokeh (defocused light) and junction beads hide nothing. Draw
+  order, all additive so it changes nothing else: brain twin (-3), stars
+  testing depth (-2), nodes' twin (-1), lines / beads / pulses testing
+  depth (0..3), brain (10). The drilled level gets a twin for its report
+  nodes (3) ahead of its lines (4); the reports themselves never test.
+- Everything the twins occlude is a soft-edged tube or sprite cut inside
+  an opaque disc: no seam to hide. Flat billboard depth, not a sphere's:
+  the body fade already hides the last disc radius of every line, where
+  the difference would show.
+- `render.occlusion` (true) turns it all off per frame - nothing writes,
+  nothing tests, the all-additive scene as it was. Draw calls 7 -> 9 (the
+  two twins), the §8 gate's bound exactly.
+- Gate 7/7: 60 fps, white-clip 0.00%, 7x median 12.5/255.
+- Still open from the review: trunk grouping (5) - at thousands of nodes
+  the spokes, not occlusion, are what fills the centre; the backdrop and
+  dust (7); the bokeh fog at 3x.

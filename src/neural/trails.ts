@@ -287,6 +287,7 @@ const TRAIL_VERT = /* glsl */ `
   uniform float uViewportH;   // drawing-buffer height, px
   uniform float uTanHalfFov;
   uniform float uMinRadiusPx;
+  uniform float uMaxRadiusPx;
   attribute vec4 aFlow;
   attribute vec2 aFade;
   attribute vec3 aAxis;
@@ -294,6 +295,10 @@ const TRAIL_VERT = /* glsl */ `
   varying float vDepth;
   varying vec4 vFlow;
   varying vec2 vFade;
+  varying vec3 vPosView;
+  varying vec3 vAxisView;
+  varying float vRadius;
+  varying float vRadiusPx;
   void main() {
     vColor = color;
     vFlow = aFlow;
@@ -301,18 +306,27 @@ const TRAIL_VERT = /* glsl */ `
     // Hairline (trail.minRadiusPx): a ring thinner than the minimum on
     // screen is widened along its arm to the minimum and its light scaled
     // down by the same ratio - the coverage MSAA averaged, at no fill cost.
+    // Width cap (trail.maxRadiusPx): a ring wider than the cap on screen is
+    // narrowed to it - a string is a filament at 12x, never a highway.
     vec3 arm = position - aAxis;
     float r = length(arm);
     vec4 mvAxis = modelViewMatrix * vec4(aAxis, 1.0);
     float pxPerWu = uViewportH / (2.0 * uTanHalfFov * max(1.0, -mvAxis.z));
     float rPx = max(1e-4, r * pxPerWu);
     float widen = max(1.0, uMinRadiusPx / rPx);
-    vec3 p = aAxis + arm * widen;
+    float narrow = min(1.0, uMaxRadiusPx / (rPx * widen));
+    float scale = widen * narrow;
+    vec3 p = aAxis + arm * scale;
     vec4 wp = modelMatrix * vec4(p, 1.0);
     float range = uR * uRangeMult;
     float zn = clamp((wp.z + range) / (2.0 * range), 0.0, 1.0);
     float ss = zn * zn * (3.0 - 2.0 * zn);
     vDepth = (uFloor + (1.0 - uFloor) * ss) / widen; // same zNorm curve as the stars, x coverage
+    // the filament profile (fragment) needs the drawn radius and the axis
+    vRadius = r * scale;
+    vRadiusPx = rPx * scale;
+    vAxisView = mvAxis.xyz;
+    vPosView = (modelViewMatrix * vec4(p, 1.0)).xyz;
     gl_Position = projectionMatrix * viewMatrix * wp;
   }
 `
@@ -324,10 +338,17 @@ const TRAIL_FRAG = /* glsl */ `
   uniform float uFlowPeriod;
   uniform float uFlowInward;
   uniform float uFlowRateBoost;
+  uniform float uFilamentPow;
+  uniform float uFilamentGain;
+  uniform float uFilamentFromPx;
   varying vec3 vColor;
   varying float vDepth;
   varying vec4 vFlow;
   varying vec2 vFade;
+  varying vec3 vPosView;
+  varying vec3 vAxisView;
+  varying float vRadius;
+  varying float vRadiusPx;
   void main() {
     // Energy flow: a soft band travelling along the trail, staggered per
     // trail. t runs parent (0) -> child (1); dir = -1 (uFlowInward) moves the
@@ -349,7 +370,23 @@ const TRAIL_FRAG = /* glsl */ `
     // instead of painting a bar across it - in over the parent's disc,
     // out over the child's (trail.bodyFade x disc radius, in t).
     float body = smoothstep(0.0, vFade.x, vFlow.x) * (1.0 - smoothstep(1.0 - vFade.y, 1.0, vFlow.x));
-    gl_FragColor = vec4(vColor * (vFlow.w + flow), uOpacity * vDepth * body);
+    // Filament (line-shading pass): across a tube wide enough to show it
+    // the light follows the chord through the cylinder, sqrt(1 - (d/R)^2)
+    // with d the distance from the centreline - bright down the middle,
+    // soft at the edges; the flat ribbon was the last sticker in a
+    // close-up. Under uFilamentFromPx the band is a pixel or two and the
+    // profile stays off, so the rest view is untouched.
+    float filament = 1.0;
+    float show = smoothstep(uFilamentFromPx, uFilamentFromPx * 3.0, vRadiusPx);
+    if (show > 0.001) {
+      vec3 vd = normalize(-vAxisView);
+      vec3 a = vPosView - vAxisView;
+      float d = length(a - vd * dot(a, vd));
+      float q = clamp(d / max(vRadius, 1e-6), 0.0, 1.0);
+      float chord = sqrt(1.0 - q * q);
+      filament = mix(1.0, uFilamentGain * pow(chord, uFilamentPow), show);
+    }
+    gl_FragColor = vec4(vColor * (vFlow.w + flow), uOpacity * vDepth * body * filament);
     #include <colorspace_fragment>
   }
 `
@@ -372,6 +409,10 @@ export function createTrailMaterial(pass: 'core' | 'glow'): ShaderMaterial {
       uViewportH: { value: 900 }, // set per frame from the drawing buffer
       uTanHalfFov: { value: Math.tan((NCONF.camera.fov * Math.PI) / 360) },
       uMinRadiusPx: { value: NCONF.trail.minRadiusPx },
+      uMaxRadiusPx: { value: NCONF.trail.maxRadiusPx * (pass === 'glow' ? NCONF.trail.glowRadiusMult : 1) },
+      uFilamentPow: { value: NCONF.trail.filamentPow },
+      uFilamentGain: { value: NCONF.trail.filamentGain },
+      uFilamentFromPx: { value: NCONF.trail.filamentFromPx },
     },
     vertexColors: true,
     transparent: true,
@@ -392,6 +433,9 @@ export function syncTrailUniforms(core: ShaderMaterial, glow: ShaderMaterial, ti
   for (const m of [core, glow]) {
     if (viewportH !== undefined) m.uniforms.uViewportH.value = viewportH
     m.uniforms.uMinRadiusPx.value = NCONF.trail.minRadiusPx
+    m.uniforms.uFilamentPow.value = Math.max(0.1, NCONF.trail.filamentPow)
+    m.uniforms.uFilamentGain.value = NCONF.trail.filamentGain
+    m.uniforms.uFilamentFromPx.value = Math.max(0.1, NCONF.trail.filamentFromPx)
     m.uniforms.uR.value = NCONF.generation.R
     m.uniforms.uRangeMult.value = NCONF.depth.rangeMult
     m.uniforms.uFloor.value = NCONF.depth.opacityFloor
@@ -404,6 +448,10 @@ export function syncTrailUniforms(core: ShaderMaterial, glow: ShaderMaterial, ti
   }
   core.uniforms.uOpacity.value = NCONF.trail.coreOpacity
   glow.uniforms.uOpacity.value = NCONF.trail.glowOpacity
+  // the cap is never under the hairline's floor, or the shader would fight itself
+  const cap = Math.max(NCONF.trail.minRadiusPx, NCONF.trail.maxRadiusPx)
+  core.uniforms.uMaxRadiusPx.value = cap
+  glow.uniforms.uMaxRadiusPx.value = cap * NCONF.trail.glowRadiusMult
 }
 
 /**

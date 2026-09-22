@@ -1034,3 +1034,32 @@ Decisions: docs/DECISIONS.md ("Node bodies").
   white-clip 0.00%, 7x median 12.9/255. fps probe: 60 at rest / 6x / 12x,
   1x and retina, shading on or off. Shots: shots/neural-p4.png,
   shots/neural-zoom7.png (refreshed).
+
+# Line shading (2026-09-21)
+
+Decisions: docs/DECISIONS.md ("Line shading").
+- `trails.ts`: width cap in the vertex shader (uMaxRadiusPx, after the
+  hairline widen; vRadius / vRadiusPx / vAxisView / vPosView varyings),
+  the chord filament profile in the fragment (uFilamentPow / Gain /
+  FromPx). `config.ts`: trail.maxRadiusPx / filamentPow / filamentGain /
+  filamentFromPx. `NeuralScene.tsx`: leva 'neural line' folder (with
+  minRadiusPx).
+- Tests 259 (no shader tests; aFlow pinned, unchanged). tsc + oxlint clean.
+- Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 7,
+  white-clip 0.00%, 7x median 12.5/255. Shots: shots/neural-p4.png,
+  shots/neural-zoom7.png (refreshed).
+
+# Scoped occlusion (2026-09-21)
+
+Decisions: docs/DECISIONS.md ("Scoped occlusion").
+- `starField.ts`: `createDepthTwin` (DEPTH_FRAG: discard outside
+  x < uOccludeEdge, on bokeh and beads; colorWrite off, depthWrite on,
+  NoBlending, shares geometry + uniforms). `config.ts`:
+  render.occlusion / occludeEdge. `NeuralScene.tsx`: starDepth (-1) and
+  brainDepth (-3) in `built`, starMesh to -2, depthTest on the stars,
+  trails, beads and pulses set per frame from render.occlusion, twins
+  hidden when off; the drill level's reportDepth (3) added / disposed
+  with the shell; leva toggle + occludeEdge under 'neural body'.
+- Tests 259. tsc + oxlint clean.
+- Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 9 (bound
+  9), white-clip 0.00%, 7x median 12.5/255. Shots refreshed.

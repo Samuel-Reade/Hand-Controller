@@ -108,6 +108,15 @@ export interface NeuralConfig {
     detailStart: number     // mottle fades in from this fraction of frame height the sprite spans...
     detailEnd: number       // ...full here (disc ~ 0.3 of the sprite); the pinpoint fades out over the same span
     pinMaxPx: number        // the white pinpoint's radius cap, device px (it scaled with the disc: a sticker up close)
+    // Scoped occlusion (2026-09-21): node bodies hide the LINES behind
+    // them and the brain hides the nodes and lines behind it; bodies never
+    // hide bodies, so at thousands of nodes no shout is lost to the one in
+    // front (rotate and it is there anyway). A depth twin of each star
+    // mesh writes depth for the solid disc only (x < occludeEdge, inside
+    // the opaque part, so the cut is never seen); glow, bokeh and beads
+    // hide nothing.
+    occlusion: boolean
+    occludeEdge: number     // the twin's disc radius in dr; keep under discEdge's opaque plateau
   }
   depth: {
     rangeMult: number      // depth.range = ±rangeMult × R
@@ -166,6 +175,14 @@ export interface NeuralConfig {
     // minRadiusPx on screen is widened to it and dimmed by the same ratio -
     // the light MSAA coverage would have averaged, with no coverage cost.
     minRadiusPx: number
+    // Line shading (2026-09-21): across a tube wide enough to show it the
+    // light follows the chord through the cylinder - bright down the
+    // middle, soft at the edges - and a ring wider than maxRadiusPx on
+    // screen is narrowed to it: a string is a filament, never a highway.
+    maxRadiusPx: number     // core pass, device px; the glow pass gets x glowRadiusMult
+    filamentPow: number     // chord exponent: 1 = the cylinder, higher = a tighter core
+    filamentGain: number    // brightness x under the profile (pi/4 of the ribbon's light at pow 1 -> 1.27 keeps it)
+    filamentFromPx: number  // the profile fades in from this on-screen radius; under it, parity
     radByTier: Record<NeuralTier, number>
     radDefault: number
     // Energy flow (visual pass): a soft band of brightness travelling along
@@ -315,6 +332,8 @@ export const NCONF: NeuralConfig = {
     detailStart: 0.05,
     detailEnd: 0.15,
     pinMaxPx: 3,
+    occlusion: true,
+    occludeEdge: 0.85,
   },
   depth: { rangeMult: 1.5, opacityFloor: 0.15, desatStrength: 0 },
   // Measured on the 160-post field (PORT_LOG): gamma 0.6 puts the median
@@ -333,6 +352,10 @@ export const NCONF: NeuralConfig = {
     endInset: 0,
     bodyFade: 1.0,
     minRadiusPx: 0.6,
+    maxRadiusPx: 6,
+    filamentPow: 1.5,
+    filamentGain: 1.5,
+    filamentFromPx: 2,
     // brain 1.8 -> 1.2: with 160 spokes the P0 thickness (sized for 20) is
     // the starburst; a popular post's spoke is still the thickest line drawn.
     radByTier: { brain: 1.2, hub: 1.1, node: 0.65, sub: 0.35, terminal: 0.3 },
