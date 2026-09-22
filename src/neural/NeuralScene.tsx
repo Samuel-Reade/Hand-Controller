@@ -20,11 +20,15 @@ import { useControls } from 'leva'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AdditiveBlending,
+  BufferAttribute,
+  BufferGeometry,
   Color,
   Group,
   Mesh,
   PlaneGeometry,
+  Points,
   ShaderMaterial,
+  Vector2,
   Vector3,
 } from 'three'
 import { FEEL } from '../config/feel'
@@ -151,9 +155,17 @@ const ENV_VERT = /* glsl */ `
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `
-const WASH_FRAG = /* glsl */ `
+// The haze (backdrop pass, 2026-09-22): the P0 wash and warm planes on ONE
+// plane - the same two radial gradients, summed the way two additive
+// passes summed (rgb x a each), so the picture is identical and a draw call
+// is freed for the dust. uInside dims it as the camera enters the system.
+const HAZE_FRAG = /* glsl */ `
+  uniform float uInside;
+  uniform vec2 uWarmCentre; // the warm accent's centre, in uv
+  uniform vec2 uWarmScale;  // uv -> the accent's own radius units
   varying vec2 vUv;
   void main() {
+    // wash: the P0 stops
     float r = clamp(distance(vUv, vec2(0.5)) * 2.0, 0.0, 1.0);
     vec3 cIn = vec3(10.0, 24.0, 48.0) / 255.0;
     vec3 cMid = vec3(6.0, 14.0, 28.0) / 255.0;
@@ -168,45 +180,103 @@ const WASH_FRAG = /* glsl */ `
       c = mix(cMid, vec3(0.0), t);
       a = mix(0.60, 0.0, t);
     }
-    gl_FragColor = vec4(c, a);
+    vec3 light = c * a;
+    // warm accent: the P0 stops, at its own place and radii
+    float rw = clamp(length((vUv - uWarmCentre) * uWarmScale), 0.0, 1.0);
+    vec3 wIn = vec3(60.0, 22.0, 8.0) / 255.0;
+    vec3 wMid = vec3(30.0, 10.0, 4.0) / 255.0;
+    vec3 wc;
+    float wa;
+    if (rw < 0.5) {
+      float t = rw / 0.5;
+      wc = mix(wIn, wMid, t);
+      wa = mix(0.55, 0.22, t);
+    } else {
+      float t = (rw - 0.5) / 0.5;
+      wc = mix(wMid, vec3(0.0), t);
+      wa = mix(0.22, 0.0, t);
+    }
+    light += wc * wa;
+    gl_FragColor = vec4(light * uInside, 1.0); // additive: rgb x 1 + dst
     #include <colorspace_fragment>
   }
 `
-const WARM_FRAG = /* glsl */ `
-  varying vec2 vUv;
+// Dust: fixed-size points, a soft disc each, faded out near the camera so a
+// mote drifting past the lens never reads as a shout.
+const DUST_VERT = /* glsl */ `
+  uniform float uSizePx;   // device px
+  uniform float uNearFade; // wu: gone this close to the camera
+  attribute float aSeed;
+  varying float vAlpha;
   void main() {
-    float r = clamp(distance(vUv, vec2(0.5)) * 2.0, 0.0, 1.0);
-    vec3 cIn = vec3(60.0, 22.0, 8.0) / 255.0;
-    vec3 cMid = vec3(30.0, 10.0, 4.0) / 255.0;
-    vec3 c;
-    float a;
-    if (r < 0.5) {
-      float t = r / 0.5;
-      c = mix(cIn, cMid, t);
-      a = mix(0.55, 0.22, t);
-    } else {
-      float t = (r - 0.5) / 0.5;
-      c = mix(cMid, vec3(0.0), t);
-      a = mix(0.22, 0.0, t);
-    }
-    gl_FragColor = vec4(c, a);
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    float depth = max(1.0, -mv.z);
+    vAlpha = (0.35 + 0.65 * aSeed) * smoothstep(uNearFade * 0.4, uNearFade, depth);
+    gl_PointSize = uSizePx * (0.7 + 0.6 * fract(aSeed * 7.31));
+    gl_Position = projectionMatrix * mv;
+  }
+`
+const DUST_FRAG = /* glsl */ `
+  uniform float uOpacity;
+  varying float vAlpha;
+  void main() {
+    float d = length(gl_PointCoord - 0.5);
+    float a = (1.0 - smoothstep(0.25, 0.5, d)) * vAlpha * uOpacity;
+    gl_FragColor = vec4(vec3(0.62, 0.70, 0.85) * a, 1.0); // grey-blue, not a data colour
     #include <colorspace_fragment>
   }
 `
 // Grain moved to the light pipeline (postfx.ts): it has to ride AFTER tone
 // mapping - in the linear target, 3% noise on black came out as sparkle.
 
-function envMesh(frag: string, w: number, h: number): Mesh {
+/** The dust shell: `count` points between `radius` and 1.6 radius from the
+ *  field's origin, an LCG on the generation seed (deterministic; not part of
+ *  the layout hash - dust is not layout). */
+function buildDust(count: number, radius: number): Points {
+  let s = (NCONF.generation.seed ^ 0x9e3779b9) >>> 0
+  const rnd = () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    return s / 4294967296
+  }
+  const pos = new Float32Array(count * 3)
+  const seed = new Float32Array(count)
+  for (let i = 0; i < count; i++) {
+    const u = rnd() * 2 - 1 // cos(polar): uniform on the sphere
+    const phi = rnd() * Math.PI * 2
+    const r = radius * (1 + 0.6 * Math.cbrt(rnd())) // uniform in the shell's volume
+    const sq = Math.sqrt(1 - u * u)
+    pos[i * 3] = r * sq * Math.cos(phi)
+    pos[i * 3 + 1] = r * sq * Math.sin(phi)
+    pos[i * 3 + 2] = r * u
+    seed[i] = rnd()
+  }
+  const geo = new BufferGeometry()
+  geo.setAttribute('position', new BufferAttribute(pos, 3))
+  geo.setAttribute('aSeed', new BufferAttribute(seed, 1))
   const mat = new ShaderMaterial({
-    vertexShader: ENV_VERT,
-    fragmentShader: frag,
+    vertexShader: DUST_VERT,
+    fragmentShader: DUST_FRAG,
+    uniforms: {
+      uSizePx: { value: 2 },
+      uNearFade: { value: 3000 },
+      uOpacity: { value: NCONF.render.dustOpacity },
+    },
     transparent: true,
     blending: AdditiveBlending,
     depthWrite: false,
     depthTest: false,
   })
-  return new Mesh(new PlaneGeometry(w, h), mat)
+  const pts = new Points(geo, mat)
+  pts.frustumCulled = false
+  pts.renderOrder = -8
+  return pts
 }
+
+const smooth01 = (x: number): number => {
+  const t = Math.min(1, Math.max(0, x))
+  return t * t * (3 - 2 * t)
+}
+const ORIGIN = new Vector3()
 
 function slider(
   get: () => number,
@@ -232,8 +302,12 @@ const BEAD_DIAM = 6
 const BEAD_OPA = [1, 1, 1] as const
 // Backdrop plane depths at the REST view (world z with the camera at
 // NCONF.camera.z). useFrame keeps them at this distance from the camera.
-const WASH_Z = -1200
-const WARM_Z = -1100
+// The haze plane and the warm accent's place on it: the P0 wash was
+// 7000 x 5000; the warm plane 2800 x 2200 at (-550, 350) from the brain.
+const HAZE_W = 7000
+const HAZE_H = 5000
+const WARM_OFFSET = [-550, 350] as const
+const WARM_RADII = [1400, 1100] as const
 const TAN_HALF_FOV = Math.tan((52 / 2) * (Math.PI / 180))
 const UP = new Vector3(0, 1, 0)
 const FALLBACK = new Vector3(1, 0, 0)
@@ -568,6 +642,13 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       onChange: (v: boolean) => { NCONF.render.grainEnabled = v },
     },
     grainAmount: slider(() => NCONF.render.grainAmount, (v) => { NCONF.render.grainAmount = v }, 0, 0.1, 0.005),
+    // backdrop pass: the haze's place and its inside floor, the dust's look
+    hazeBehind: slider(() => NCONF.render.hazeBehind, (v) => { NCONF.render.hazeBehind = v }, 0, 4000, 50),
+    hazeMinAhead: slider(() => NCONF.render.hazeMinAhead, (v) => { NCONF.render.hazeMinAhead = v }, 100, 4000, 50),
+    hazeInside: slider(() => NCONF.render.hazeInside, (v) => { NCONF.render.hazeInside = v }, 0, 1, 0.05),
+    dustOpacity: slider(() => NCONF.render.dustOpacity, (v) => { NCONF.render.dustOpacity = v }, 0, 1, 0.01),
+    dustSizePx: slider(() => NCONF.render.dustSizePx, (v) => { NCONF.render.dustSizePx = v }, 0.5, 4, 0.1),
+    dustParallax: slider(() => NCONF.render.dustParallax, (v) => { NCONF.render.dustParallax = v }, 0, 1, 0.05),
   })
 
   // Lighting pass: the pipeline, the glare profile and the body fade (the
@@ -626,13 +707,25 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
   })
 
   const environment = useMemo(() => {
-    const wash = envMesh(WASH_FRAG, 7000, 5000)
-    wash.position.z = WASH_Z
-    wash.renderOrder = -10
-    const warm = envMesh(WARM_FRAG, 2800, 2200)
-    warm.position.set(-550, 350, WARM_Z)
-    warm.renderOrder = -9
-    return { wash, warm }
+    const haze = new Mesh(
+      new PlaneGeometry(HAZE_W, HAZE_H),
+      new ShaderMaterial({
+        vertexShader: ENV_VERT,
+        fragmentShader: HAZE_FRAG,
+        uniforms: {
+          uInside: { value: 1 },
+          uWarmCentre: { value: new Vector2(0.5 + WARM_OFFSET[0] / HAZE_W, 0.5 + WARM_OFFSET[1] / HAZE_H) },
+          uWarmScale: { value: new Vector2(HAZE_W / WARM_RADII[0], HAZE_H / WARM_RADII[1]) },
+        },
+        transparent: true,
+        blending: AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    )
+    haze.renderOrder = -10
+    const dust = buildDust(NCONF.render.dustCount, NCONF.render.dustRadius)
+    return { haze, dust }
   }, [])
 
   const built = useMemo(() => {
@@ -1170,13 +1263,32 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     zoomRuntime.displayed = zf
     zoomRuntime.level = d.target
 
-    // The backdrop planes ride with the camera at their rest-view distance:
-    // they are a backdrop, not a wall. Fixed in world space, the dolly flew
-    // INTO them and the black went blue-grey (background luminance 4 -> 69
-    // /255 between 1x and 7x). At zoom 1 this is exactly where they always were.
+    // The haze is the system's light: behind the brain in world space, so it
+    // scales with the system on screen (at rest exactly where the
+    // camera-riding plane was), never closer than hazeMinAhead in front of
+    // the camera (a backdrop, not a wall - fixed in place, the dolly once
+    // flew into it and the black went blue-grey), and dimmed toward
+    // hazeInside as the camera enters the system: from inside a glowing
+    // cloud the column of glow in front of you is half as long.
     const camZ = state.camera.position.z
-    environment.wash.position.z = camZ - NCONF.camera.z + WASH_Z
-    environment.warm.position.z = camZ - NCONF.camera.z + WARM_Z
+    const brain = offsetRef.current?.position ?? ORIGIN // the field's origin in world
+    const hazeZ = Math.min(brain.z - NCONF.render.hazeBehind, camZ - NCONF.render.hazeMinAhead)
+    environment.haze.position.set(brain.x, brain.y, hazeZ)
+    // Zooming OUT the plane keeps its world size and shrinks with the
+    // system; zooming IN it is scaled down so its size on screen never
+    // exceeds the rest view's - world-fixed, at 7x its core filled the frame
+    // and the §8 gate's median went 12.9 -> 33/255 (the typical pixel must
+    // stay black). Scale 1 at rest exactly.
+    environment.haze.scale.setScalar(Math.min(1, (camZ - hazeZ) / (NCONF.camera.z + NCONF.render.hazeBehind)))
+    const camDist = Math.hypot(brain.x, brain.y, camZ - brain.z)
+    const outside = smooth01((camDist - NCONF.render.hazeBehind) / (NCONF.camera.z - NCONF.render.hazeBehind))
+    ;(environment.haze.material as ShaderMaterial).uniforms.uInside.value =
+      NCONF.render.hazeInside + (1 - NCONF.render.hazeInside) * outside
+    // Dust: parallax on the user's own rotation, at a fraction of the field's.
+    environment.dust.rotation.set(physics.pitch * NCONF.render.dustParallax, physics.yaw * NCONF.render.dustParallax, 0)
+    const dustMat = environment.dust.material as ShaderMaterial
+    dustMat.uniforms.uSizePx.value = NCONF.render.dustSizePx * state.viewport.dpr
+    dustMat.uniforms.uOpacity.value = NCONF.render.dustOpacity
 
     // Uniform sync (O(1) - no per-node JS). The clock drives the momentum
     // pulse and the trail energy bands in the shaders; beads stay still.
@@ -1533,8 +1645,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
 
   return (
     <>
-      <primitive object={environment.wash} />
-      <primitive object={environment.warm} />
+      <primitive object={environment.haze} />
+      <primitive object={environment.dust} />
       <group ref={offsetRef}>
         <group ref={tiltRef}>
           <group ref={spinRef}>

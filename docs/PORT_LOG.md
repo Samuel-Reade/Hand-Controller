@@ -1093,3 +1093,22 @@ Decisions: docs/DECISIONS.md ("Depth of field").
 - Tests 263. tsc + oxlint clean.
 - Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 9,
   white-clip 0.00%, 7x median 12.9/255. Shots refreshed.
+
+# Backdrop and dust (2026-09-22)
+
+Decisions: docs/DECISIONS.md ("Backdrop and dust").
+- `NeuralScene.tsx`: HAZE_FRAG (the P0 wash + warm on one plane, uInside),
+  DUST_VERT / DUST_FRAG + `buildDust` (Points, aSeed); `environment` is
+  now { haze, dust }; per frame: the haze at the brain minus hazeBehind
+  (clamped to hazeMinAhead ahead of the camera), scaled by min(1,
+  distance / rest), uInside from the camera's distance to the brain; the
+  dust rotates at dustParallax of the physics yaw / pitch, size x dpr.
+  envMesh, WASH_FRAG, WARM_FRAG, WASH_Z, WARM_Z removed. `config.ts`:
+  render.hazeBehind / hazeMinAhead / hazeInside / dustCount / dustRadius /
+  dustSizePx / dustOpacity / dustParallax; sliders under 'neural
+  environment' (count and radius are config-only: they bake geometry).
+- Tests 263. tsc + oxlint clean.
+- Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 9,
+  white-clip 0.00%, 7x median 11.6/255, rest 6.6. A world-fixed plane
+  without the scale clamp failed the 7x gate at 33/255 (recorded in the
+  decision). Shots refreshed.

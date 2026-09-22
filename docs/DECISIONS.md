@@ -1470,3 +1470,52 @@ or drop them".
 - Gate 7/7: 60 fps, white-clip 0.00%, 7x median 12.9/255. Layout hash
   unchanged.
 - Left from the review: the backdrop and dust (7).
+
+## Backdrop and dust (2026-09-22, user direction)
+Brief (user): "do the backdrop" - the review's last item: at 0.45x the
+system shrank to a thumbnail inside a screen-sized glow, and the warm
+patch floated to the left over nothing.
+- **The haze is the system's light** (NeuralScene.tsx): the plane sits
+  behind the brain in WORLD space - at the field's origin (offsetRef's
+  position) minus `hazeBehind` (1200) - so it shrinks and grows with the
+  system on screen. At rest that is exactly where the camera-riding plane
+  was (world z -1200), so the rest view is untouched; after a click it
+  follows the brain.
+- **Zooming in it keeps its rest size on screen**: world-fixed, at 7x its
+  core filled the frame and the §8 gate's median went 12.9 -> 33/255 -
+  sRGB encoding means halving the light only takes ~27% off the encoded
+  value. The gate is a locked product decision (the typical pixel stays
+  black at 7x), so the plane is scaled by min(1, distance / rest distance):
+  zooming OUT it keeps its world size (the complaint), zooming IN its size
+  on screen never exceeds the rest view's - the original "a backdrop, not
+  a wall" ruling, generalised. Scale 1 at rest exactly. It also never
+  comes closer than `hazeMinAhead` (1500) in front of the camera, for the
+  drilled level where the brain can end up behind the camera.
+- **Dimmer from inside** (`hazeInside` 0.6): the haze eases toward that
+  floor as the camera enters the system (camera distance to the brain
+  from rest down to hazeBehind). Physics says half - from inside a glowing
+  cloud the column of glow in front of you is half as long; 0.6 keeps
+  the 3x background from going flat.
+- **The warm accent on the same plane**: one shader, the same two radial
+  gradients summed the way two additive passes summed (rgb x a each) -
+  the picture is identical - and the freed draw call pays for the dust
+  (the gate's bound is 9; the scene is at 9).
+- **Dust**: 1400 points in a shell 5500-8800 wu from the field's origin
+  (an LCG on the generation seed; not part of the layout hash - dust is
+  not layout), a soft disc each at a fixed `dustSizePx` (1.4 CSS px),
+  grey-blue (not a data colour) at `dustOpacity` 0.22 x a per-point
+  0.35-1, faded out within 3000 wu of the camera so a mote drifting past
+  the lens never reads as a shout. It turns at `dustParallax` (0.35) of
+  the field's yaw / pitch: parallax on the user's own input only - no
+  ambient motion, the momentum channel owns motion. Not a node: never
+  hovered, pointed or clicked. Too dim to mistake for a shout: the
+  faintest shout is ~0.45 alpha with a halo; dust is <= 0.22 at 2-3 px.
+- Gate 7/7: 7x median 11.6/255 (rest 6.6, unchanged), white-clip 0.00%,
+  60 fps, draws 9.
+- **The review list (2026-09-21) is complete**: lighting, node bodies,
+  line shading, scoped occlusion, trunk grouping, depth of field,
+  backdrop and dust. Follow-ups noted along the way: trunks as real
+  shared lines (a cubic with two trunk controls) for thousands of shouts;
+  `bokehCount` / `bokehScale` are dead config now that no terminals exist
+  and defocus does the job; the red accents and the violet brain are
+  placeholders the palette rules say to replace once shout data lands.

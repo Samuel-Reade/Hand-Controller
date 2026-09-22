@@ -141,6 +141,27 @@ export interface NeuralConfig {
     // bokehOpacity - the flagged sprites' own knob.
     defocusStart: number
     defocusEnd: number
+    // Backdrop and dust (2026-09-22): the haze is the system's light - a
+    // plane behind the brain in WORLD space, so it shrinks and grows with
+    // the system on screen (at rest exactly where the camera-riding plane
+    // was; the warm accent rides on the same plane). hazeBehind: wu behind
+    // the brain; hazeMinAhead: never closer than this in front of the
+    // camera (a backdrop, not a wall); hazeInside: the floor the haze dims
+    // to as the camera enters the system - from inside a glowing cloud the
+    // column of glow in front of you is half as long, so its centre reads
+    // half as bright. Dust: a shell of faint points far outside the field,
+    // turning at dustParallax of the field's rotation - parallax on the
+    // user's own input, no ambient motion (the momentum channel owns
+    // motion); a fixed dustSizePx on screen; too dim to mistake for a
+    // shout; not a node, so never hovered or clicked.
+    hazeBehind: number
+    hazeMinAhead: number
+    hazeInside: number
+    dustCount: number       // baked into the geometry (no slider)
+    dustRadius: number      // shell inner radius, wu; the outer is x 1.6 (no slider)
+    dustSizePx: number      // CSS px
+    dustOpacity: number
+    dustParallax: number    // fraction of the field's yaw / pitch
   }
   depth: {
     rangeMult: number      // depth.range = ±rangeMult × R
@@ -372,6 +393,14 @@ export const NCONF: NeuralConfig = {
     glowCapPx: 30,
     defocusStart: 0.8,
     defocusEnd: 1.8,
+    hazeBehind: 1200,
+    hazeMinAhead: 1500,
+    hazeInside: 0.6,
+    dustCount: 1400,
+    dustRadius: 5500,
+    dustSizePx: 1.4,
+    dustOpacity: 0.22,
+    dustParallax: 0.35,
   },
   depth: { rangeMult: 1.5, opacityFloor: 0.15, desatStrength: 0 },
   // Measured on the 160-post field (PORT_LOG): gamma 0.6 puts the median
