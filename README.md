@@ -6,7 +6,9 @@ into the fixed reticle is selected, and categories drill in (tap a hub star
 to fly into its system, tap the anchor to fly back out). Driven by
 mouse/keyboard or webcam hand tracking (pinch-drag to rotate, pinch-tap to
 open, both hands pinched and pulled toward you / pushed away to zoom in and
-out - the zoom commits the drill at a threshold). Specs live in `docs/`: see
+out - the zoom commits the drill at a threshold). The scroll wheel zooms too:
+scroll up zooms in, down zooms out, and a trackpad pinch works the same way.
+Specs live in `docs/`: see
 docs/ORB_BUILD_SPEC.md for the base spec, docs/ORB_NEURAL_PORT_SPEC.md +
 docs/PORT_LOG.md for the neural port, docs/ORB_ZOOM_SPEC.md for the two-hand
 zoom, docs/ORB_SELECT_SPEC.md for crosshair pointing + free rotation (not yet

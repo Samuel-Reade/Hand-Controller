@@ -84,6 +84,10 @@ export function FeelPanel({ hidden }: { hidden: boolean }) {
   })
   useControls('pointer', {
     tapMaxTravelPx: slider('tapMaxTravelPx', 2, 20, 1),
+    // scroll zoom: up = in, down = out
+    scrollZoomGain: slider('scrollZoomGain', 0.0002, 0.01, 0.0001),
+    pinchZoomGain: slider('pinchZoomGain', 0.001, 0.05, 0.001),
+    scrollZoomRate: slider('scrollZoomRate', 2, 60, 1),
   })
   return (
     <>

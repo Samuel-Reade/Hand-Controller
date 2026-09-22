@@ -2,13 +2,15 @@
 // up = release, or tap if total travel stayed under the tap radius.
 // The physics never learns a mouse exists. A tap carries where it landed
 // (px from the stage centre) so a scene can hit-test the node under the
-// cursor; the physics ignores the position.
+// cursor; the physics ignores the position. The wheel zooms (scroll up =
+// in, down = out); a trackpad pinch arrives as a wheel too.
 
 import { useEffect } from 'react'
 import type { RefObject } from 'react'
 import { FEEL } from '../config/feel'
 import type { InputBus } from './InputBus'
 import { cursorRuntime } from './cursor'
+import { scrollZoomLog } from './zoomView'
 import { useStore } from '../store'
 
 interface Sample {
@@ -107,17 +109,28 @@ export function usePointerInput(targetRef: RefObject<HTMLElement | null>, bus: I
     const onUp = (e: PointerEvent) => endDrag(e, 'release')
     const onCancel = (e: PointerEvent) => endDrag(e, 'lost')
 
+    // Scroll to zoom. Default always prevented: the page must not scroll,
+    // and a pinch (ctrlKey) must not browser-zoom the whole app.
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      if (useStore.getState().openReport) return // orb input suspended (S2)
+      const logFactor = scrollZoomLog(e)
+      if (logFactor !== 0) bus.emit({ type: 'scrollZoom', logFactor })
+    }
+
     el.addEventListener('pointerdown', onDown)
     el.addEventListener('pointermove', onMove)
     el.addEventListener('pointerup', onUp)
     el.addEventListener('pointercancel', onCancel)
     el.addEventListener('pointerleave', onLeave)
+    el.addEventListener('wheel', onWheel, { passive: false })
     return () => {
       el.removeEventListener('pointerdown', onDown)
       el.removeEventListener('pointermove', onMove)
       el.removeEventListener('pointerup', onUp)
       el.removeEventListener('pointercancel', onCancel)
       el.removeEventListener('pointerleave', onLeave)
+      el.removeEventListener('wheel', onWheel)
       cursorRuntime.inside = false
       cursorRuntime.down = false
     }

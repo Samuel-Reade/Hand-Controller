@@ -1202,3 +1202,37 @@ corner."
   view on open; rejected.
 - Leva toggles only on the chevron icon, not the title text.
 - `?tune=0` still hides everything, gear included, for scripted shots.
+
+## Scroll to zoom (2026-09-18, user direction)
+Brief (user): "a user can scroll to zoom in and out. It should follow regular
+scroll mechanics. Scroll up is zoom and scroll down is zoom out."
+- **Direction is the browser's**: wheel `deltaY < 0` (scroll up) zooms in,
+  `deltaY > 0` out - the sign every map and design tool uses. The OS's
+  scroll-direction setting (macOS natural scrolling) applies to the zoom
+  exactly as it does to page scrolling; nothing here inverts it.
+- **Exponential**: each notch is the same ratio at any zoom (ln(zoom) per px,
+  `scrollZoomGain` 0.002: a 100 px mouse notch = x1.22), so scrolling back
+  the same amount returns exactly. Firefox's line-mode wheel is converted at
+  33 px a line (its 3-line notch = Chrome's 100 px). One event never moves
+  the zoom more than x1.5.
+- **Trackpad pinch** arrives as a wheel with `ctrlKey` (Chrome, Edge, Firefox)
+  and gets its own gain (`pinchZoomGain` 0.01 = 1:1 with the fingers in
+  Chrome). The default is always prevented on the stage, so neither the page
+  scrolls nor a pinch browser-zooms the app.
+- **It glides**: the scroll moves a target (`ZoomView.baseTarget`) and the
+  persistent zoom eases to it in log space at `scrollZoomRate` (14/s, ~0.25 s
+  to 97 %), so a mouse notch is not a jump; a trackpad's stream stays
+  continuous.
+- **Same dolly as the two-hand zoom**: it moves the persistent base, so it
+  compounds with hand gestures both ways, dollies toward whatever holds the
+  centre (the brain, or a clicked node - the pivot), shares the
+  `zoomMin`/`zoomMax` range (0.2-12) and never drills. Scrolling past a
+  limit banks nothing; the first notch back responds.
+- **Toward the centre, not the cursor**: the field rotates about its pinned
+  centre and a click is how a node becomes that centre; zoom-to-cursor
+  would have to move the pin on every notch. Not built.
+- A new bus event, `scrollZoom`, not the hand's `zoom`: the gaze channel
+  treats `zoom` as a hand taking the floor and suspends until a release,
+  which a wheel never sends. The physics and the gaze arbitration ignore
+  `scrollZoom`. Suspended while the shell is open (S2).
+- Neural scene only; `?scene=globe` stays zoom-less.

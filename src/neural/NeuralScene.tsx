@@ -31,6 +31,7 @@ import { FEEL } from '../config/feel'
 import { ORBITS } from '../data/orbits'
 import type { InputBus } from '../input/InputBus'
 import {
+  applyScrollZoom,
   applyZoomEvent,
   commitZoomView,
   createZoomView,
@@ -723,6 +724,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     window.__neuralDev = {
       setZoom: (factor) => {
         zoomView.base = Math.max(FEEL.zoomMin, Math.min(FEEL.zoomMax, factor))
+        zoomView.baseTarget = zoomView.base
         zoomView.hand = 1
       },
       projectNode: project,
@@ -939,6 +941,12 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     return bus.on((e) => {
       if (e.type === 'zoom') {
         applyZoomEvent(zoomView, e)
+        return
+      }
+      // Scroll zoom: the same dolly as the two-hand zoom, toward whatever
+      // holds the centre (the brain, or a clicked node). Never drills.
+      if (e.type === 'scrollZoom') {
+        applyScrollZoom(zoomView, e.logFactor)
         return
       }
       if (e.type === 'home') {

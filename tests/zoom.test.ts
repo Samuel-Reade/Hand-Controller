@@ -7,9 +7,11 @@ import type { InputEvent } from '../src/input/InputBus'
 import { createHandPipeline } from '../src/input/gestureMachine'
 import { createMultiHandPipeline } from '../src/input/handArbiter'
 import {
+  applyScrollZoom,
   applyZoomEvent,
   commitZoomView,
   createZoomView,
+  scrollZoomLog,
   stepZoomView,
 } from '../src/input/zoomView'
 import { FRAME_MS, pairScenarios, scenarios, toPairFrames } from '../src/dev/syntheticHand'
@@ -419,5 +421,98 @@ describe('persistent zoom (neural profile: zoomPersist=true)', () => {
     FEEL.zoomPersist = false
     const s = run('zoomPeekRelease')
     expect(Math.abs(settleView(s) - 1)).toBeLessThan(0.02)
+  })
+})
+
+describe('scroll zoom (wheel / trackpad)', () => {
+  beforeEach(() => {
+    FEEL.zoomPersist = true
+    FEEL.zoomMin = 0.2
+    FEEL.zoomMax = 12
+    FEEL.scrollZoomGain = 0.002
+    FEEL.pinchZoomGain = 0.01
+    FEEL.scrollZoomRate = 14
+  })
+  const wheel = (deltaY: number, deltaMode = 0, ctrlKey = false) => scrollZoomLog({ deltaY, deltaMode, ctrlKey })
+  const settle = (v: ReturnType<typeof createZoomView>, seconds = 2) => {
+    let f = v.factor
+    for (let i = 0; i < seconds * 60; i++) f = stepZoomView(v, 1 / 60, 1)
+    return f
+  }
+
+  it('regular scroll mechanics: scroll up (deltaY < 0) zooms in, down zooms out, symmetrically', () => {
+    expect(wheel(-100)).toBeGreaterThan(0)
+    expect(wheel(100)).toBeLessThan(0)
+    expect(wheel(-100)).toBeCloseTo(-wheel(100), 12)
+    expect(wheel(0) === 0).toBe(true) // -0 counts: the shell emits nothing for it
+    expect(Math.exp(wheel(-100))).toBeCloseTo(Math.exp(0.2), 6) // a 100 px notch = x1.22
+  })
+
+  it('line-mode wheels (Firefox) scroll like pixel-mode ones: 3 lines ~ a 100 px notch', () => {
+    expect(wheel(-3, 1)).toBeCloseTo(wheel(-99, 0), 12)
+  })
+
+  it('a trackpad pinch (ctrlKey) uses its own gain: 0.01 follows the fingers 1:1', () => {
+    expect(wheel(-10, 0, true)).toBeCloseTo(0.1, 12)
+    expect(wheel(10, 0, true)).toBeCloseTo(-0.1, 12)
+  })
+
+  it('one event never zooms more than x1.5 (page-mode or ctrl + mouse-wheel events)', () => {
+    expect(wheel(-3, 2)).toBeCloseTo(Math.log(1.5), 12)
+    expect(wheel(100, 0, true)).toBeCloseTo(-Math.log(1.5), 12)
+  })
+
+  it('the camera glides to the scrolled zoom - monotonic, no overshoot, settled in ~0.3 s', () => {
+    const v = createZoomView()
+    applyScrollZoom(v, Math.log(2))
+    const fs: number[] = []
+    for (let i = 0; i < 60; i++) fs.push(stepZoomView(v, 1 / 60, 1))
+    expect(fs[0]).toBeGreaterThan(1)
+    expect(fs[0]).toBeLessThan(1.3) // not a step
+    expect(isMonotonic(fs, false)).toBe(true)
+    expect(Math.max(...fs)).toBeLessThanOrEqual(2)
+    expect(fs[17]).toBeGreaterThan(2 * 0.97) // ~0.3 s
+    expect(fs[59]).toBe(2) // snaps exactly
+  })
+
+  it('scrolling back the same amount returns exactly (exponential, not additive)', () => {
+    const v = createZoomView()
+    for (let i = 0; i < 5; i++) applyScrollZoom(v, wheel(-100))
+    expect(settle(v)).toBeCloseTo(Math.exp(1), 6)
+    for (let i = 0; i < 5; i++) applyScrollZoom(v, wheel(100))
+    expect(settle(v)).toBe(1)
+  })
+
+  it('clamped to [zoomMin, zoomMax] - scrolling past a limit banks nothing, the first notch back responds', () => {
+    const v = createZoomView()
+    for (let i = 0; i < 100; i++) applyScrollZoom(v, wheel(-100))
+    expect(settle(v)).toBe(FEEL.zoomMax)
+    applyScrollZoom(v, wheel(100))
+    expect(settle(v)).toBeCloseTo(FEEL.zoomMax / Math.exp(0.2), 6)
+    for (let i = 0; i < 100; i++) applyScrollZoom(v, wheel(100))
+    expect(settle(v)).toBe(FEEL.zoomMin)
+  })
+
+  it('composes with the two-hand zoom: scroll, then a hand gesture multiplies onto it and is kept', () => {
+    const v = createZoomView()
+    applyScrollZoom(v, Math.log(2))
+    expect(settle(v)).toBe(2)
+    applyZoomEvent(v, { type: 'zoom', phase: 'engage', factor: 1, commit: 'none' })
+    expect(stepZoomView(v, 1 / 60, 1)).toBe(2) // no jump at engage
+    applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: 1.5, commit: 'none' })
+    expect(stepZoomView(v, 1 / 60, 1)).toBeCloseTo(3, 6)
+    applyZoomEvent(v, { type: 'zoom', phase: 'end', factor: 1.5, commit: 'none' })
+    expect(settle(v)).toBeCloseTo(3, 6) // the fold keeps the target with it - no glide back to 2
+    applyScrollZoom(v, -Math.log(3))
+    expect(settle(v)).toBeCloseTo(1, 6)
+  })
+
+  it('a hand gesture ending mid-glide folds into the glide, not over it', () => {
+    const v = createZoomView()
+    applyScrollZoom(v, Math.log(2))
+    stepZoomView(v, 1 / 60, 1) // gliding: base between 1 and 2
+    applyZoomEvent(v, { type: 'zoom', phase: 'update', factor: 1.5, commit: 'none' })
+    applyZoomEvent(v, { type: 'zoom', phase: 'end', factor: 1.5, commit: 'none' })
+    expect(settle(v)).toBeCloseTo(3, 6)
   })
 })

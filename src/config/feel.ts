@@ -39,6 +39,10 @@ export interface FeelConfig {
   zoomCommitsDrill: boolean // false = pure camera dolly, never drills (human-gate fork)
   zoomPersist: boolean      // true = a released zoom is KEPT (folded into a running base);
                             // false = ORB_ZOOM_SPEC spring-back to 1.0. Neural profile: true.
+  // scroll zoom (wheel / trackpad): scrolling up zooms in, down zooms out
+  scrollZoomGain: number   // ln(zoom) per px of wheel deltaY: a 100 px mouse notch = x1.22
+  pinchZoomGain: number    // the same for a trackpad pinch (a wheel with ctrlKey); 0.01 follows the fingers 1:1 in Chrome
+  scrollZoomRate: number   // 1/s: the camera eases to the scrolled zoom, so a wheel notch glides instead of stepping
 }
 
 export const FEEL: FeelConfig = {
@@ -73,6 +77,9 @@ export const FEEL: FeelConfig = {
   twoHandFrames:    2,
   zoomCommitsDrill: true,
   zoomPersist:      false,
+  scrollZoomGain:   0.002,
+  pinchZoomGain:    0.01,
+  scrollZoomRate:   14,
 }
 
 // prefers-reduced-motion (S11): inertia IS the product, so the coast

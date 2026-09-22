@@ -978,3 +978,22 @@ Decisions: docs/DECISIONS.md ("Click learning").
 - Tests 250 (+2 in tests/eye.test.ts). tsc + oxlint clean. Gates NOT run
   (the point-select gate in verify-eye still covers the gaze path; the
   click path has no gate yet).
+
+# Scroll to zoom (2026-09-18)
+
+Decisions: docs/DECISIONS.md ("Scroll to zoom").
+- `InputBus.ts`: `scrollZoom { logFactor }`. `config/feel.ts`:
+  `scrollZoomGain`, `pinchZoomGain`, `scrollZoomRate` (FeelPanel >
+  pointer). `input/zoomView.ts`: `scrollZoomLog` (wheel -> ln zoom),
+  `applyScrollZoom`, `ZoomView.baseTarget` + the log-space glide in
+  `stepZoomView`; the hand fold carries the target with the base.
+  `usePointerInput.ts`: non-passive `wheel` on the stage.
+  `NeuralScene.tsx`: applies `scrollZoom`; `__neuralDev.setZoom` sets the
+  target too.
+- Tests 259 (+9 in tests/zoom.test.ts). tsc + oxlint clean.
+- Machine gate `scripts/verify-scroll-zoom.mjs`: ALL 9 PASS (5 notches up
+  = x2.707, back to 1.005, out to 0.551; 43-frame monotonic glide; pinch
+  x1.215; page scrollY 0 / scale 1; shell open suspends it; zero errors).
+  Shots: shots/scroll-zoom-in.png, shots/scroll-zoom-out.png. Run against
+  the cached headless shell 1243: Playwright 1.62.1 wants 1234, which is
+  not installed - `npx playwright install chromium` fixes every gate.

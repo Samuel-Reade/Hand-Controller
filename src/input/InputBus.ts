@@ -32,6 +32,11 @@ export type InputEvent =
   // its EXISTING drill-in/out transition on `zoomCommit`.
   | { type: 'zoom'; phase: 'engage' | 'update' | 'end'; factor: number; commit: ZoomCommit }
   | { type: 'zoomCommit'; dir: 'in' | 'out' }
+  // Scroll-wheel / trackpad zoom, regular scroll mechanics: scrolling up
+  // zooms in, down zooms out. `logFactor` is the natural log of the zoom
+  // multiplier, already gained (> 0 = in). The physics and the gaze
+  // arbitration ignore it; the neural scene folds it into its persistent zoom.
+  | { type: 'scrollZoom'; logFactor: number }
 
 export type InputListener = (event: InputEvent) => void
 
