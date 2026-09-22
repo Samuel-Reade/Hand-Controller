@@ -1063,3 +1063,17 @@ Decisions: docs/DECISIONS.md ("Scoped occlusion").
 - Tests 259. tsc + oxlint clean.
 - Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 9 (bound
   9), white-clip 0.00%, 7x median 12.5/255. Shots refreshed.
+
+# Trunk grouping (2026-09-21)
+
+Decisions: docs/DECISIONS.md ("Trunk grouping").
+- `trails.ts`: `clusterDirections` (exported) + the trunk map in
+  `buildTrailSpecs`; the control point lerps from the individual bend to
+  the trunk point. `config.ts`: trail.bundleStrength / bundleCone /
+  bundleBranch. `NeuralScene.tsx`: rebuild sliders under 'neural line'.
+- `tests/trails.test.ts`: the bend test runs with bundleStrength 0; a new
+  block for the clustering, the shared rays, the strength lerp and the
+  endpoints. Tests 263. tsc + oxlint clean.
+- Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 9,
+  white-clip 0.00%, 7x median 13.2/255, layout hash d29411df unchanged.
+  Shots refreshed.

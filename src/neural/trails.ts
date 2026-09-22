@@ -53,6 +53,61 @@ const UP = new Vector3(0, 1, 0)
 const FALLBACK = new Vector3(1, 0, 0)
 
 /**
+ * Trunk grouping: cluster unit directions into trunks. Greedy in input
+ * order - each direction joins the trunk whose running mean lies within
+ * `coneDeg` of it (the closest such), else starts one - then one refinement
+ * pass re-assigns every direction to its nearest final mean and re-means.
+ * Deterministic: the same input gives the same trunks, so the layout hash
+ * holds. Returns each direction's trunk and the trunks' unit means.
+ */
+export function clusterDirections(
+  dirs: readonly Vector3[],
+  coneDeg: number,
+): { assignment: number[]; means: Vector3[] } {
+  const cosCone = Math.cos((coneDeg * Math.PI) / 180)
+  const means: Vector3[] = []
+  const sums: Vector3[] = []
+  const assignment: number[] = []
+  for (const d of dirs) {
+    let best = -1
+    let bestDot = cosCone
+    for (let t = 0; t < means.length; t++) {
+      const dot = means[t].dot(d)
+      if (dot >= bestDot) {
+        bestDot = dot
+        best = t
+      }
+    }
+    if (best < 0) {
+      best = means.length
+      means.push(d.clone())
+      sums.push(new Vector3())
+    }
+    sums[best].add(d)
+    means[best].copy(sums[best]).normalize()
+    assignment.push(best)
+  }
+  const refined = means.map(() => new Vector3())
+  for (let i = 0; i < dirs.length; i++) {
+    let best = assignment[i]
+    let bestDot = -2
+    for (let t = 0; t < means.length; t++) {
+      const dot = means[t].dot(dirs[i])
+      if (dot > bestDot) {
+        bestDot = dot
+        best = t
+      }
+    }
+    assignment[i] = best
+    refined[best].add(dirs[i])
+  }
+  for (let t = 0; t < means.length; t++) {
+    if (refined[t].lengthSq() > 1e-9) means[t].copy(refined[t]).normalize()
+  }
+  return { assignment, means }
+}
+
+/**
  * Pure geometry plan for every trail - exactly one per non-brain node.
  * `diamOf` gives each node's sprite diameter so trails end on the disc
  * surface; sizes are the rallies channel now, so the default (tier table) is
@@ -68,6 +123,25 @@ export function buildTrailSpecs(
   const byName = new Map(nodes.map((n) => [n.name, n]))
   const positions = new Map(nodes.map((n) => [n.name, new Vector3(...nodePosition(n))]))
   const specs: TrailSpec[] = []
+
+  // Trunk grouping (trail.bundle*): each parent's children, clustered by
+  // direction, give every child the unit direction of its trunk.
+  const trunks = new Map<string, Vector3>()
+  if (cfg.trail.bundleStrength > 0) {
+    const children = new Map<string, NeuralNode[]>()
+    for (const n of nodes) {
+      if (!n.parentName || !byName.has(n.parentName)) continue
+      const list = children.get(n.parentName) ?? []
+      list.push(n)
+      children.set(n.parentName, list)
+    }
+    for (const [parentName, kids] of children) {
+      const pPos = positions.get(parentName) as Vector3
+      const dirs = kids.map((k) => (positions.get(k.name) as Vector3).clone().sub(pPos).normalize())
+      const { assignment, means } = clusterDirections(dirs, cfg.trail.bundleCone)
+      kids.forEach((k, i) => trunks.set(k.name, means[assignment[i]]))
+    }
+  }
 
   for (const n of nodes) {
     if (!n.parentName) continue
@@ -95,6 +169,14 @@ export function buildTrailSpecs(
     if (perp.lengthSq() < 0.01) perp.crossVectors(chord, FALLBACK).normalize()
     const sign = Math.sin(n.phi * 7.3 + n.theta) > 0 ? 1 : -1
     const ctrl = mid.addScaledVector(perp, chordLen * cfg.trail.bendFraction * sign)
+    // Trunk grouping: the control point pulled onto the trunk's ray at
+    // bundleBranch of the child's distance, so the quadratic leaves the
+    // parent along the trunk (every sibling in the trunk shares that
+    // tangent, and near the parent the same line) and peels off toward the
+    // child. A trunk of one puts the control on its own chord: a straight
+    // string. Strength 0 keeps the individual bend above.
+    const trunkDir = trunks.get(n.name)
+    if (trunkDir) ctrl.lerp(pPos.clone().addScaledVector(trunkDir, cfg.trail.bundleBranch * dist), cfg.trail.bundleStrength)
 
     // traction weight: a popular post's spoke is full; a minor one a hairline.
     // Quadratic in t so the median post (t ~ 0.2) sits near the floor.

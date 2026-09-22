@@ -613,6 +613,10 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     filamentPow: slider(() => NCONF.trail.filamentPow, (v) => { NCONF.trail.filamentPow = v }, 0.5, 4, 0.05),
     filamentGain: slider(() => NCONF.trail.filamentGain, (v) => { NCONF.trail.filamentGain = v }, 0.5, 3, 0.05),
     filamentFromPx: slider(() => NCONF.trail.filamentFromPx, (v) => { NCONF.trail.filamentFromPx = v }, 0.5, 10, 0.25),
+    // trunk grouping is baked into the geometry: these rebuild
+    bundleStrength: rebuildSlider(() => NCONF.trail.bundleStrength, (v) => { NCONF.trail.bundleStrength = v }, 0, 1, 0.05),
+    bundleCone: rebuildSlider(() => NCONF.trail.bundleCone, (v) => { NCONF.trail.bundleCone = v }, 5, 90, 1),
+    bundleBranch: rebuildSlider(() => NCONF.trail.bundleBranch, (v) => { NCONF.trail.bundleBranch = v }, 0.1, 0.9, 0.05),
   })
 
   const environment = useMemo(() => {

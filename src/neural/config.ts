@@ -183,6 +183,16 @@ export interface NeuralConfig {
     filamentPow: number     // chord exponent: 1 = the cylinder, higher = a tighter core
     filamentGain: number    // brightness x under the profile (pi/4 of the ribbon's light at pow 1 -> 1.27 keeps it)
     filamentFromPx: number  // the profile fades in from this on-screen radius; under it, parity
+    // Trunk grouping (2026-09-21): a parent's children are clustered by
+    // direction (within bundleCone degrees) into trunks; each spoke's
+    // control point is pulled by bundleStrength onto its trunk's ray, at
+    // bundleBranch of the child's distance, so the spokes leave the parent
+    // as one trunk and peel off toward their children - dendrites, not a
+    // firework, and at thousands of shouts a few trunks at the brain
+    // instead of a solid cone. 0 = the individual bend (bendFraction).
+    bundleStrength: number
+    bundleCone: number      // degrees: siblings closer than this share a trunk
+    bundleBranch: number    // the trunk point, as a fraction of the child's distance
     radByTier: Record<NeuralTier, number>
     radDefault: number
     // Energy flow (visual pass): a soft band of brightness travelling along
@@ -356,6 +366,9 @@ export const NCONF: NeuralConfig = {
     filamentPow: 1.5,
     filamentGain: 1.5,
     filamentFromPx: 2,
+    bundleStrength: 0.9,
+    bundleCone: 40,
+    bundleBranch: 0.45,
     // brain 1.8 -> 1.2: with 160 spokes the P0 thickness (sized for 20) is
     // the starburst; a popular post's spoke is still the thickest line drawn.
     radByTier: { brain: 1.2, hub: 1.1, node: 0.65, sub: 0.35, terminal: 0.3 },

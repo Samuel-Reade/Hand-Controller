@@ -5,6 +5,7 @@ import { buildGraph, nodePosition } from '../src/neural/graph'
 import { PAL, TRAIL_BASE, TRAIL_HOT } from '../src/neural/palette'
 import {
   buildTrailSpecs,
+  clusterDirections,
   coreColorAt,
   glowColorAt,
   taperRadius,
@@ -63,10 +64,11 @@ describe('trail topology (P3 machine gate)', () => {
     }
   })
 
-  it('bend sign is deterministic from the child φ/θ', () => {
+  it('bend sign is deterministic from the child φ/θ (the individual bend: bundling off)', () => {
     const byName = new Map(nodes.map((n) => [n.name, n]))
     const UP = new Vector3(0, 1, 0)
-    for (const s of specs.slice(0, 60)) {
+    const unbundled = buildTrailSpecs(nodes, { ...NCONF, trail: { ...NCONF.trail, bundleStrength: 0 } })
+    for (const s of unbundled.slice(0, 60)) {
       const child = byName.get(s.childName)
       if (!child) throw new Error('missing child')
       const expected = Math.sin(child.phi * 7.3 + child.theta) > 0 ? 1 : -1
@@ -121,5 +123,51 @@ describe('vertex color program (§4.3, exact)', () => {
     expect(g.r).toBeCloseTo(expected.r, 9)
     expect(g.g).toBeCloseTo(expected.g, 9)
     expect(g.b).toBeCloseTo(expected.b, 9)
+  })
+})
+
+describe('trunk grouping (2026-09-21): spokes leave a parent as trunks', () => {
+  const byName = new Map(nodes.map((n) => [n.name, n]))
+  const pos = (name: string) => new Vector3(...nodePosition(byName.get(name)!))
+  const tangent = (s: { ctrl: Vector3; pSurf: Vector3 }) => s.ctrl.clone().sub(s.pSurf).normalize()
+  const withStrength = (bundleStrength: number) =>
+    buildTrailSpecs(nodes, { ...NCONF, trail: { ...NCONF.trail, bundleStrength } })
+
+  it('clusterDirections: within the cone share a trunk, outside it start one; deterministic', () => {
+    const d = (deg: number) => new Vector3(Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180), 0)
+    const dirs = [d(0), d(10), d(-12), d(90), d(100), d(200)]
+    const a = clusterDirections(dirs, 40)
+    expect(a.assignment).toEqual([0, 0, 0, 1, 1, 2])
+    expect(a.means).toHaveLength(3)
+    expect(a.means[0].angleTo(d(-0.67))).toBeLessThan(0.01) // the mean of 0, 10, -12
+    expect(clusterDirections(dirs, 40).assignment).toEqual(a.assignment)
+  })
+
+  it('at strength 1 the brain\'s spokes leave along a few shared rays, each within its own cone', () => {
+    const hubSpokes = withStrength(1).filter((s) => s.parentTier === 'brain')
+    expect(hubSpokes.length).toBeGreaterThan(20)
+    const rays = new Set(hubSpokes.map((s) => tangent(s).toArray().map((v) => v.toFixed(4)).join(',')))
+    expect(rays.size).toBeLessThan(hubSpokes.length / 2)
+    for (const s of hubSpokes) {
+      const own = s.cSurf.clone().sub(s.pSurf).normalize()
+      expect(tangent(s).angleTo(own)).toBeLessThan((NCONF.trail.bundleCone * 1.5 * Math.PI) / 180)
+    }
+  })
+
+  it('strength 0 is the individual bend; the default control lies between it and the trunk ray', () => {
+    const off = withStrength(0)
+    const full = withStrength(1)
+    for (let i = 0; i < 40; i++) {
+      const expected = off[i].ctrl.clone().lerp(full[i].ctrl, NCONF.trail.bundleStrength)
+      expect(specs[i].ctrl.distanceTo(expected)).toBeLessThan(1e-6)
+    }
+  })
+
+  it('endpoints and the one-trail-per-node topology are untouched by bundling', () => {
+    for (const s of specs.slice(0, 40)) {
+      expect(s.pSurf.distanceTo(pos(s.parentName))).toBeLessThan(1e-6)
+      expect(s.cSurf.distanceTo(pos(s.childName))).toBeLessThan(1e-6)
+    }
+    expect(specs.length).toBe(nodes.length - 1)
   })
 })

@@ -1388,3 +1388,36 @@ user asked whether occlusion would hide nodes at thousands of shouts.
 - Still open from the review: trunk grouping (5) - at thousands of nodes
   the spokes, not occlusion, are what fills the centre; the backdrop and
   dust (7); the bokeh fog at 3x.
+
+## Trunk grouping (2026-09-21, user direction)
+Brief (user): "continue" after the review's fix 5, moved ahead of the
+rest because of the user's scale question: at thousands of shouts the
+spokes, not occlusion, are what fills the centre - 47 straight rays into
+the brain already read as a firework.
+- **The rule** (trails.ts `clusterDirections`): each parent's children
+  are clustered by direction into trunks - greedy in node order, a child
+  joins the trunk whose running mean lies within `bundleCone` (40 deg) of
+  it, else starts one; one refinement pass re-assigns to the nearest mean
+  and re-means. Deterministic, so the layout hash holds (d29411df).
+- **The curve**: the quadratic's control point is pulled by
+  `bundleStrength` (0.9) onto the trunk's ray at `bundleBranch` (0.45) of
+  the child's distance. Every sibling in a trunk then leaves the parent
+  with the same tangent - and, near the parent, along the same line - and
+  peels off toward its own child: a trunk that splits, dendrites. A trunk
+  of one puts the control on its own chord: a straight string. Strength 0
+  is the individual bend (bendFraction), which the old test now pins with
+  bundling off.
+- Endpoints, one trail per node, the momentum band, the body fade and the
+  pulses (they read the control point in their vertex shader) are all
+  unchanged. Where a trunk's tubes overlap near the parent the additive
+  light makes it brighter and wider - the trunk carrying more.
+- Applied at every level (brain -> hubs, hub -> nodes, ...): with 4-5
+  children a hub's fan usually becomes one or two trunks. At scale the
+  cone is the lever: a wider cone, fewer trunks.
+- Tests 263 (+4: the clustering, shared rays at strength 1, the default
+  between bend and trunk, endpoints untouched). Gate 7/7: 60 fps,
+  white-clip 0.00%, 7x median 13.2/255.
+- Still open from the review: the backdrop and dust (7); the bokeh fog at
+  3x. A next step for scale: bundling at the trunk point too (a cubic
+  with two trunk controls), so the shared section is a real line rather
+  than a tangent.
