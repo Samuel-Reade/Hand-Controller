@@ -81,7 +81,7 @@ import type { ViewSpec } from './pointing'
 import { buildPulseMesh, syncPulseUniforms } from './pulses'
 import { childShell, hubDirs, hubOrbitIndex, resolveLevel1, resolveReticle } from './selection'
 import type { ChildShellItem } from './selection'
-import { createDepthTwin, createStarMesh, syncStarUniforms } from './starField'
+import { createDepthTwin, createStarMesh, starRuntime, syncStarUniforms } from './starField'
 import type { StarInstance } from './starField'
 import { buildTrailMeshes, buildTrailSpecs, syncTrailUniforms } from './trails'
 import type { TrailSpec } from './trails'
@@ -604,6 +604,12 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       onChange: (v: boolean) => { NCONF.render.occlusion = v },
     },
     occludeEdge: slider(() => NCONF.render.occludeEdge, (v) => { NCONF.render.occludeEdge = v }, 0.3, 1.3, 0.01),
+    // fog pass: the limb up close, and the glow's on-screen cap
+    discEdgeNear: slider(() => NCONF.render.discEdgeNear, (v) => { NCONF.render.discEdgeNear = v }, 1.01, 1.6, 0.01),
+    glowCapPx: slider(() => NCONF.render.glowCapPx, (v) => { NCONF.render.glowCapPx = v }, 4, 200, 1),
+    // depth of field: stops from the focus plane where defocus starts / is full
+    defocusStart: slider(() => NCONF.render.defocusStart, (v) => { NCONF.render.defocusStart = v }, 0.1, 3, 0.05),
+    defocusEnd: slider(() => NCONF.render.defocusEnd, (v) => { NCONF.render.defocusEnd = v }, 0.2, 4, 0.05),
   })
 
   // Lines: the hairline floor, the width cap and the filament profile.
@@ -1184,9 +1190,17 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     for (const m of [built.trails.core, built.trails.glow, built.beadMesh, built.pulseMesh]) {
       ;(m.material as ShaderMaterial).depthTest = occ
     }
+    // Per-frame scale for the star shaders: the drawing buffer (the glow
+    // cap, the trails' hairline) and the focus distance (depth of field) -
+    // the pin sits at world z = push (the offset above), the camera at
+    // push + (rest - push) / zoom, so the pivot's depth is camera.z - push.
+    // (Focus at the origin defocused the clicked node itself at 6x: its
+    // depth was 133 against a camera at 3133.)
+    const viewportH = state.size.height * state.viewport.dpr
+    starRuntime.viewportH = viewportH
+    starRuntime.focusZ = state.camera.position.z - push
     syncStarUniforms(built.starMesh.material as ShaderMaterial, tSec)
     syncStarUniforms(built.beadMesh.material as ShaderMaterial)
-    const viewportH = state.size.height * state.viewport.dpr // hairline px scale
     syncTrailUniforms(
       built.trails.core.material as ShaderMaterial,
       built.trails.glow.material as ShaderMaterial,

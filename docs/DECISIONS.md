@@ -1421,3 +1421,52 @@ the brain already read as a firework.
   3x. A next step for scale: bundling at the trunk point too (a cubic
   with two trunk controls), so the shared section is a real line rather
   than a tangent.
+
+## Depth of field - the "fog" at 3x (2026-09-21/22, user direction)
+Brief (user): "do the next step" - the review's last small item, "the ten
+bokeh sprites read as fog at 3x: blur by distance from the focused node,
+or drop them".
+- **Correction to the record.** There are no bokeh sprites. The Rally
+  shape generates no terminal tier, so `bokehCount: 10` flags nothing
+  (tests/neural.test.ts pins min(count, terminals) = 0); every "bokeh"
+  mention in the entries above was a misread. The fog was ordinary shouts
+  near the camera: at 3x the camera sits 1533 wu from the pivot and
+  `n_h70_n0`, a minor node 293 wu away, was a 280 px translucent disc
+  (opaFor: a minor shout's body is ~0.5 alpha by the rallies channel)
+  wearing a limb, mottle and glow layers that scale with the world size.
+- **Depth of field** (starField.ts): a node's defocus is
+  smoothstep(defocusStart 0.8, defocusEnd 1.8, |ln(depth / focus)|) -
+  stops from the focus plane. Out of focus it takes the treatment the
+  P0 bokeh sprites faked, continuously: no glare, no limb, no detail, the
+  depth opacity replaced by bokehOpacity (0.22), the body edge blurred,
+  the heart spread and cooled, the occlusion cut shrunk to nothing. The
+  flagged sprites alone keep the 10x bokeh scale. The rest view sits
+  within +-0.5 stop of focus (nearest node 0.6x, farthest 1.4x), so it
+  is untouched; at 3x the near node is at 0.19x = 1.65 stops, defocus
+  0.94 - a soft, dim foreground blur the field shows through; the hub
+  beside it at 0.3x is half way.
+- **Focus is the pin, not the origin**: the clicked node lands at world
+  z = push (offsetRef) and the camera at push + (rest - push) / zoom, so
+  focus = camera.z - push. Focus at the origin defocused the clicked node
+  itself at 6x (depth 133 against a camera at 3133): a screenshot caught
+  it, a frame of dim haze.
+- **The glow has an angular size** (`glowCapPx` 30): glare and bloom are
+  drawn in a unit capped on screen instead of the disc radius, so a near
+  body is not wrapped in a translucent disc three times its size. Above
+  every rest-view disc: inert there.
+- **A resolved sphere has a limb** (`discEdgeNear` 1.08): the body's soft
+  edge tightens from discEdge (1.35, a far star blurred by the optics) as
+  the body resolves, and the ramp's start moves 0.6 -> 0.88 dr with it.
+  That also keeps the occlusion cut (0.85) inside the opaque zone; at
+  0.6 -> 1.08 it sat where the body was half transparent.
+- **The depth twin is a sphere** (DEPTH_FRAG, gl_FragDepth): each fragment
+  writes the depth of the surface, sqrt(R^2 - d^2) nearer the camera than
+  the centre plane, so a line vanishes where it enters the sphere. The
+  scene is additive - an "opaque" body never hides a line by alpha, only
+  the twin does - and flat, a line in front of the centre plane but inside
+  the sphere drew over the disc and cut off at the plane (the stub at the
+  6x rim). The "flat billboard depth" caveat in the occlusion entry is
+  closed.
+- Gate 7/7: 60 fps, white-clip 0.00%, 7x median 12.9/255. Layout hash
+  unchanged.
+- Left from the review: the backdrop and dust (7).

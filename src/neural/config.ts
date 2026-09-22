@@ -117,6 +117,30 @@ export interface NeuralConfig {
     // hide nothing.
     occlusion: boolean
     occludeEdge: number     // the twin's disc radius in dr; keep under discEdge's opaque plateau
+    // Fog pass (2026-09-21): the "fog" at 3x was ordinary nodes near the
+    // camera - a body whose soft edge (0.6..discEdge dr) still blurs when
+    // the disc is 140 px, wearing glow layers that scale with the world
+    // size, so a halo right at rest is a translucent disc three times the
+    // body up close. The limb tightens to discEdgeNear as the body
+    // resolves (the detail ramp), and the glow's unit - the disc radius
+    // the glare and bloom are drawn in - is capped at glowCapPx on screen:
+    // glare has a fixed angular size. The cap sits above every rest-view
+    // disc, so the rest view is untouched.
+    discEdgeNear: number    // the body's soft edge at full detail, in dr (discEdge from afar)
+    glowCapPx: number       // the glow unit's cap, device px
+    // Depth of field (fog pass): a node far from the focus plane - the
+    // pivot the camera looks at - is out of focus. The review's "ten bokeh
+    // sprites" were a misread: the Rally shape generates no terminals, so
+    // bokehCount flags nothing; the fog at 3x was ordinary shouts near the
+    // camera, a minor one a 280 px translucent disc with a limb and mottle.
+    // Out of focus it is what the P0 bokeh sprites faked: a soft, dim disc
+    // with no glare, no limb, no detail - a foreground blur the eye reads
+    // as depth. Defocus rises over |ln(depth / focus)| from defocusStart to
+    // defocusEnd stops; the rest view sits within +-0.5 stop of focus, so
+    // it is untouched. Fully defocused, the depth opacity is replaced by
+    // bokehOpacity - the flagged sprites' own knob.
+    defocusStart: number
+    defocusEnd: number
   }
   depth: {
     rangeMult: number      // depth.range = ±rangeMult × R
@@ -344,6 +368,10 @@ export const NCONF: NeuralConfig = {
     pinMaxPx: 3,
     occlusion: true,
     occludeEdge: 0.85,
+    discEdgeNear: 1.08,
+    glowCapPx: 30,
+    defocusStart: 0.8,
+    defocusEnd: 1.8,
   },
   depth: { rangeMult: 1.5, opacityFloor: 0.15, desatStrength: 0 },
   // Measured on the 160-post field (PORT_LOG): gamma 0.6 puts the median

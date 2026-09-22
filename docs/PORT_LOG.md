@@ -1077,3 +1077,19 @@ Decisions: docs/DECISIONS.md ("Trunk grouping").
 - Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 9,
   white-clip 0.00%, 7x median 13.2/255, layout hash d29411df unchanged.
   Shots refreshed.
+
+# Depth of field / fog (2026-09-21/22)
+
+Decisions: docs/DECISIONS.md ("Depth of field").
+- `starField.ts`: defocus from |ln(depth / uFocusZ)| in the vertex shader
+  -> vBokeh continuous (the bokeh paths: glare, limb, detail, opacity,
+  pin, the twin's cut); body edge / heart blur with vBokeh; glow unit
+  capped at uGlowCapPx (vSizePx); edge = mix(discEdge, discEdgeNear,
+  detail), ramp start mix(0.6, 0.88, detail); DEPTH_FRAG writes a
+  sphere's depth (vViewPos, vDiscR, projectionMatrix). `starRuntime`
+  gains focusZ. `config.ts`: render.discEdgeNear / glowCapPx /
+  defocusStart / defocusEnd. `NeuralScene.tsx`: starRuntime.focusZ =
+  camera.z - push, set before the star sync; sliders under 'neural body'.
+- Tests 263. tsc + oxlint clean.
+- Gate `scripts/verify-neural.mjs`: 7/7 - 60 fps, scene draws 9,
+  white-clip 0.00%, 7x median 12.9/255. Shots refreshed.

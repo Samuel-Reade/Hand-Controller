@@ -25,6 +25,10 @@ import { NCONF } from './config'
 import { HUE_INDEX, PAL, TIER_OPA, hexToRgb01 } from './palette'
 import type { NeuralHue, NeuralTier } from './palette'
 
+/** Per-frame scale the scene sets: the drawing buffer's height in device px (the glow
+ *  cap) and the camera's distance to the pivot (depth of field). */
+export const starRuntime = { viewportH: 900, focusZ: NCONF.camera.z }
+
 export interface StarInstance {
   pos: Vector3      // constellation-space position
   tier: NeuralTier
@@ -61,6 +65,10 @@ const VERT = /* glsl */ `
   uniform float uGlowFadeEnd;
   uniform float uDetailStart;
   uniform float uDetailEnd;
+  uniform float uViewportH;
+  uniform float uFocusZ;
+  uniform float uDefocusStart;
+  uniform float uDefocusEnd;
   uniform vec3 uBody[3];
   uniform vec3 uHalo[3];
   uniform vec3 uCore[3];
@@ -92,10 +100,12 @@ const VERT = /* glsl */ `
   varying float vGlow;
   varying float vBokeh;
   varying float vDetail;
+  varying float vSizePx;
+  varying vec3 vViewPos;
+  varying float vDiscR;
 
   void main() {
     vUv = position.xy; // unit quad corners at ±0.5; r=0 center
-    vBokeh = iBokeh;
     int h = int(iHue + 0.5);
     vBody = uBody[h];
     vHalo = uHalo[h];
@@ -115,10 +125,17 @@ const VERT = /* glsl */ `
     vState = iState;
 
     vec4 wc = modelMatrix * vec4(iPos, 1.0);
+    vec4 mv = viewMatrix * wc;
+    // Depth of field (fog pass): stops from the focus plane, |ln(depth /
+    // focus)|, through the defocus ramp. Out of focus a node takes the
+    // bokeh treatment - continuous, so a body eases out of focus as the
+    // camera closes in; only the flagged sprites keep the bokeh scale.
+    float defocus = smoothstep(uDefocusStart, uDefocusEnd, abs(log(max(1.0, -mv.z) / uFocusZ)));
+    vBokeh = max(iBokeh, defocus);
     float range = uR * uRangeMult;
     float zn = clamp((wc.z + range) / (2.0 * range), 0.0, 1.0);
     float ss = zn * zn * (3.0 - 2.0 * zn);
-    float depthOpa = mix(uFloor + (1.0 - uFloor) * ss, uBokehOpacity, iBokeh);
+    float depthOpa = mix(uFloor + (1.0 - uFloor) * ss, uBokehOpacity, vBokeh);
     // PORT_LOG C2: whole-sprite multiplier = depthOpa × haloOpa × tierMult.
     // The momentum lift rides haloOpa here too: a moving shout is BRIGHTER
     // (velocity glow), never bigger.
@@ -132,7 +149,6 @@ const VERT = /* glsl */ `
     vCorona = coronaMult;
     vBlaze = 1.0 + uBlaze * iRallies * iRallies;
     float size = iDiam * mix(uSpriteScale, uBokehScale, iBokeh) * uScaleMult * coronaMult;
-    vec4 mv = viewMatrix * wc;
 
     // Zoom-invariant glow: glare is an optical (screen-space) effect, so a
     // star's corona must not grow to fill the frame as the camera closes in
@@ -144,9 +160,14 @@ const VERT = /* glsl */ `
     vGlow = fade;
     // Surface detail only once the body is big enough to show it - from
     // afar a node is a pinpoint and the mottle would only alias.
-    vDetail = smoothstep(uDetailStart, uDetailEnd, frac) * (1.0 - iBokeh);
+    vDetail = smoothstep(uDetailStart, uDetailEnd, frac) * (1.0 - vBokeh); // no detail out of focus
+    vSizePx = frac * uViewportH; // the quad's width on screen, device px (the glow cap)
 
     mv.xy += position.xy * size; // view-space billboard
+    // the depth twin's sphere: the fragment's view position and the disc
+    // radius in world units (dr = DR / coronaMult of the quad's width)
+    vViewPos = mv.xyz;
+    vDiscR = size * 0.15 / coronaMult;
     gl_Position = projectionMatrix * mv;
   }
 `
@@ -172,8 +193,11 @@ const FRAG = /* glsl */ `
   varying float vGlow;
   varying float vBokeh;
   varying float vDetail;
+  varying float vSizePx;
   uniform float uTime;
   uniform float uLimb;
+  uniform float uDiscEdgeNear;
+  uniform float uGlowCapPx;
   uniform float uSurfaceAmp;
   uniform float uSurfaceScale;
   uniform float uSurfaceDrift;
@@ -220,6 +244,14 @@ const FRAG = /* glsl */ `
     float r = length(vUv);
     float px = fwidth(r); // ~1 device pixel in r units - resolution independence
     float dr = DR / vCorona; // §6 + blaze: corona/spread enlarge the quad, not the disc
+    // The glow unit (fog pass): glare and bloom are drawn in disc radii,
+    // capped at uGlowCapPx on screen - glare has a fixed angular size, and
+    // scaling with the body it wrapped every near node in a translucent
+    // disc three times its size. Above every rest-view disc, so inert there.
+    float glowUnit = min(dr, uGlowCapPx / max(1.0, vSizePx));
+    // The body's soft edge tightens as the body resolves (uDiscEdgeNear):
+    // a resolved sphere has a limb, a far star is blurred by the optics.
+    float edge = mix(uDiscEdge, uDiscEdgeNear, vDetail);
 
     if (uPinOnly > 0.5) {
       // Junction bead (§4.3): tiny soft white dot, 60% - nothing else.
@@ -239,7 +271,7 @@ const FRAG = /* glsl */ `
     //    Outside the disc only - like the corona it replaces (annular from
     //    1.2 dr): glare over the disc interior filled every body with light
     //    and the tone mapper flattened it to a white sticker.
-    float q = max(0.0, r - dr) / dr; // distance outside the disc, in disc radii
+    float q = max(0.0, r - dr) / glowUnit; // distance outside the disc, in glow units
     float glare = (1.0 - vBokeh) * (uGlare.x * exp(-(q * q) / (2.0 * uGlare.y * uGlare.y))
                                   + uGlare.z / (1.0 + (q * q) / (uGlare.w * uGlare.w)));
     glare *= smoothstep(0.6, 1.0, r / dr); // rises through the disc's soft edge
@@ -248,12 +280,13 @@ const FRAG = /* glsl */ `
     aCor *= vGlow * vBlaze; // zoom fade x blaze (vertex)
     vec4 col = vec4(vHalo, aCor);
 
-    // 2. bloom: annular inner DR×0.8 → outer DR×2.8,
-    //    stops 0.0→body×0.50, 0.5→body×0.18, 1.0→0
-    float tb = clamp((r - dr * 0.8) / (dr * 2.0), 0.0, 1.0);
+    // 2. bloom: annular inner DR×0.8 → outer 0.8 dr + 2 glow units (2.8 dr
+    //    uncapped), stops 0.0→body×0.50, 0.5→body×0.18, 1.0→0
+    float bloomOut = dr * 0.8 + glowUnit * 2.0;
+    float tb = clamp((r - dr * 0.8) / (glowUnit * 2.0), 0.0, 1.0);
     float aBloom = vOpa.y * (tb < 0.5 ? mix(0.50, 0.18, tb / 0.5)
                                       : mix(0.18, 0.0, (tb - 0.5) / 0.5));
-    aBloom *= 1.0 - smoothstep(dr * 2.8 - px, dr * 2.8, r);
+    aBloom *= 1.0 - smoothstep(bloomOut - px, bloomOut, r);
     aBloom *= min(1.0, vGlow * vBlaze);
     col = srcOver(vec4(vBody, aBloom), col);
 
@@ -265,11 +298,16 @@ const FRAG = /* glsl */ `
     //    still the rallies channel - half alpha at dr, gone by uDiscEdge dr.
     //    Mirrored by config.bodyAlpha / heartAlpha.
     float x = r / dr;
-    float heat = uCoreStrength * (0.35 + 0.65 * vRallies);
-    float coreR = uCoreSize * (0.6 + 0.4 * vRallies);
-    float aHeart = exp(-(x * x) / (2.0 * coreR * coreR)) * (0.45 + 0.55 * vRallies) * vOpa.z;
-    float aBody = vOpa.z * (1.0 - smoothstep(0.6, uDiscEdge, x));
-    vec3 bodyCol = mix(vBody, vRim, smoothstep(0.7, uDiscEdge, x));
+    // out of focus (vBokeh) the heart spreads and cools and the edge blurs
+    float heat = uCoreStrength * (0.35 + 0.65 * vRallies) * (1.0 - 0.6 * vBokeh);
+    float coreR = uCoreSize * (0.6 + 0.4 * vRallies) * (1.0 + vBokeh);
+    float aHeart = exp(-(x * x) / (2.0 * coreR * coreR)) * (0.45 + 0.55 * vRallies) * vOpa.z * (1.0 - 0.5 * vBokeh);
+    //    A resolved sphere has a limb: the ramp starts later with detail
+    //    (0.6 -> 0.88 dr), which also keeps the occlusion cut (occludeEdge
+    //    0.85) inside the opaque zone - at 0.6 -> 1.08 the cut sat where the
+    //    body was half transparent and a line behind ended in a stub.
+    float aBody = vOpa.z * (1.0 - smoothstep(mix(0.6, 0.88, vDetail) - 0.4 * vBokeh, edge + 0.5 * vBokeh, x));
+    vec3 bodyCol = mix(vBody, vRim, smoothstep(0.7, edge, x));
     vec4 body = vec4(bodyCol, aBody);
     body = srcOver(vec4(mix(vBody, vCore, heat), min(1.0, aHeart)), body);
 
@@ -302,7 +340,7 @@ const FRAG = /* glsl */ `
     //    white sticker over 22-38% of every close-up. The heart carries the
     //    centre from there.
     float pinR = clamp(dr * (0.22 + 0.16 * vRallies), px, px * uPinPx);
-    float aPin = min(1.0, vOpa.z * 0.85) * (1.0 - smoothstep(pinR - px, pinR, r)) * (1.0 - vDetail);
+    float aPin = min(1.0, vOpa.z * 0.85) * (1.0 - smoothstep(pinR - px, pinR, r)) * (1.0 - max(vDetail, vBokeh));
     body = srcOver(vec4(1.0, 1.0, 1.0, aPin), body);
 
     // Spikes: the anchor's §6 dominance cross at full length; posts above
@@ -358,14 +396,26 @@ const FRAG = /* glsl */ `
 const DEPTH_FRAG = /* glsl */ `
   uniform float uPinOnly;
   uniform float uOccludeEdge;
+  uniform mat4 projectionMatrix;
   varying vec2 vUv;
   varying float vCorona;
   varying float vBokeh;
+  varying vec3 vViewPos;
+  varying float vDiscR;
   const float DR = 0.15;
   void main() {
     float r = length(vUv);
     float dr = DR / vCorona;
-    if (vBokeh > 0.5 || uPinOnly > 0.5 || r > dr * uOccludeEdge) discard;
+    float x = r / dr;
+    // the cut shrinks with defocus: a blurred body has no hard edge to hide behind
+    if (uPinOnly > 0.5 || x > uOccludeEdge * (1.0 - vBokeh)) discard;
+    // A sphere's depth, not the billboard's: the surface sits sqrt(R^2 - d^2)
+    // nearer the camera than the plane through the centre, so a line vanishes
+    // where it enters the sphere. Flat, a line in front of the centre plane
+    // but inside the sphere drew over the disc and cut off at the plane.
+    float h = vDiscR * sqrt(max(0.0, 1.0 - x * x));
+    vec4 clip = projectionMatrix * vec4(vViewPos.xy, vViewPos.z + h, 1.0);
+    gl_FragDepthEXT = clip.z / clip.w * 0.5 + 0.5;
     gl_FragColor = vec4(0.0);
   }
 `
@@ -431,6 +481,12 @@ export function createStarMaterial(): ShaderMaterial {
       uSurfaceDrift: { value: NCONF.render.surfaceDrift },
       uPinPx: { value: NCONF.render.pinMaxPx },
       uOccludeEdge: { value: NCONF.render.occludeEdge }, // the depth twin's disc (createDepthTwin)
+      uDiscEdgeNear: { value: NCONF.render.discEdgeNear },
+      uGlowCapPx: { value: NCONF.render.glowCapPx },
+      uViewportH: { value: starRuntime.viewportH },
+      uFocusZ: { value: starRuntime.focusZ },
+      uDefocusStart: { value: NCONF.render.defocusStart },
+      uDefocusEnd: { value: NCONF.render.defocusEnd },
       uBody: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].body)).flat() },
       uHalo: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].halo)).flat() },
       uCore: { value: (['blue', 'red', 'violet'] as const).map((h) => hexToRgb01(PAL[h].core)).flat() },
@@ -485,6 +541,12 @@ export function syncStarUniforms(mat: ShaderMaterial, timeSec?: number): void {
   mat.uniforms.uSurfaceDrift.value = NCONF.render.surfaceDrift
   mat.uniforms.uPinPx.value = Math.max(1, NCONF.render.pinMaxPx) // clamp needs lo <= hi
   mat.uniforms.uOccludeEdge.value = NCONF.render.occludeEdge
+  mat.uniforms.uDiscEdgeNear.value = Math.max(1.01, NCONF.render.discEdgeNear)
+  mat.uniforms.uGlowCapPx.value = Math.max(1, NCONF.render.glowCapPx)
+  mat.uniforms.uViewportH.value = starRuntime.viewportH
+  mat.uniforms.uFocusZ.value = Math.max(1, starRuntime.focusZ)
+  mat.uniforms.uDefocusStart.value = NCONF.render.defocusStart
+  mat.uniforms.uDefocusEnd.value = Math.max(NCONF.render.defocusStart + 0.01, NCONF.render.defocusEnd)
   // widths floored so the sliders can never divide the glare by zero
   ;(mat.uniforms.uGlare.value as Vector4).set(
     NCONF.render.glareTight,
