@@ -1519,3 +1519,26 @@ patch floated to the left over nothing.
   `bokehCount` / `bokehScale` are dead config now that no terminals exist
   and defocus does the job; the red accents and the violet brain are
   placeholders the palette rules say to replace once shout data lands.
+
+## Monorepo prep (2026-09-22, user direction)
+- The app moves into the Rally monorepo (`Samuel-Reade/company`, pnpm +
+  Turborepo) as its own page: `apps/map`, package `@rally/map`, following
+  the `@rally/<name>` scheme of `@rally/community` / `@rally/vendor`.
+- Ports: dev 3300, preview 3301, both `strictPort`. The monorepo gives each
+  app a 3x00 dev port and a 3x01 test port, so the map must not share 5173
+  with anything. `scripts/*.mjs` default to 3300.
+- Location-independent: MediaPipe and model URLs are built from
+  `import.meta.env.BASE_URL` (so the page can be served under a sub-path), and
+  `tests/eyeRecordings.test.ts` finds `recordings/` from its own URL rather
+  than the cwd. A run from the workspace root used to find no recordings and
+  skip without failing.
+- `public/mediapipe/wasm` (34 MB) was byte-identical to
+  `@mediapipe/tasks-vision/wasm`. It is untracked; a plugin in `vite.config.ts`
+  serves the package's copy in dev and emits it on build. The models in
+  `public/models/` are not in the package and stay.
+- `strict: true`, matching the monorepo's `tsconfig.base.json`; the app was
+  already clean under it. TypeScript pinned to 6.0.3, the monorepo's pin.
+- The code is clean under the monorepo's root ESLint config as well as
+  oxlint. The `page.evaluate` bodies in `scripts/` declare their browser
+  globals, and the one hooks-deps suppression is an `oxlint-disable`, since
+  ESLint there has no react-hooks plugin.

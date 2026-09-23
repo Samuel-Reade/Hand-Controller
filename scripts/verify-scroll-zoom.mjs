@@ -4,9 +4,12 @@
 // by the same ratio both ways; the zoom glides (never one step); a trackpad
 // pinch (ctrl + wheel) zooms the field and never the page; the page never
 // scrolls; the open shell suspends it; zero page errors.
+// page.evaluate bodies run in the browser; the monorepo's ESLint config
+// gives scripts/ Node globals only.
+/* global clearInterval, setInterval, window */
 import { chromium } from 'playwright'
 
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 
 const browser = await chromium.launch({ args: ['--use-angle=metal'] })

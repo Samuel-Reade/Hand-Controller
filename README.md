@@ -16,12 +16,18 @@ built - it supersedes the zoom spec's drill-on-commit), and
 docs/DECISIONS.md for build choices.
 `?scene=globe` serves the original globe build for comparison (zoom-less).
 
+Package `@rally/map`, headed for `apps/map` in the Rally monorepo as its own
+page. Dev server on :3300, `vite preview` on :3301 (the monorepo gives each
+app a 3x00 dev / 3x01 test port). Asset URLs go through
+`import.meta.env.BASE_URL`, so `vite build --base=/map/` serves it under a
+sub-path.
+
 - `npm run dev` - dev server (leva tuning panel included)
 - `npm test` - geometry / physics / gesture-harness / two-hand zoom suites
 - `npm run typecheck` / `npm run lint` / `npm run build`
 - `node scripts/verify-neural.mjs` / `node scripts/verify-zoom.mjs` /
   `node scripts/verify-pointing.mjs` - machine gates against a running dev
-  server (pass `--use-angle=metal` fps gates)
+  server (default `http://localhost:3300`) (pass `--use-angle=metal` fps gates)
 
 Visual + salience passes (2026-09-09): glow fades with on-screen size so
 zoom never washes the frame; the backdrop rides with the camera; the neural

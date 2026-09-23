@@ -67,9 +67,9 @@ export function useHandInput(bus: InputBus): void {
       }
       try {
         const vision = await import('@mediapipe/tasks-vision')
-        const fileset = await vision.FilesetResolver.forVisionTasks('/mediapipe/wasm')
+        const fileset = await vision.FilesetResolver.forVisionTasks(`${import.meta.env.BASE_URL}mediapipe/wasm`)
         const options = {
-          baseOptions: { modelAssetPath: '/models/hand_landmarker.task', delegate: 'GPU' as const },
+          baseOptions: { modelAssetPath: `${import.meta.env.BASE_URL}models/hand_landmarker.task`, delegate: 'GPU' as const },
           numHands: 2, // ORB_ZOOM_SPEC section 2: two hands, handedness unused
           runningMode: 'VIDEO' as const,
         }
@@ -134,7 +134,7 @@ export function useHandInput(bus: InputBus): void {
     function detect(): void {
       if (!running || !landmarker || !video) return
       const now = performance.now()
-      let hands: NormalizedLandmark[][] = []
+      let hands: NormalizedLandmark[][]
       // ORB_EYE: with the gaze channel on and no hand in view, the hand model
       // runs on every Nth frame so the face model gets the frames it needs
       // (a real machine ran both models serially at 10 Hz). A hand in view

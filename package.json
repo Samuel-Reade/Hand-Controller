@@ -1,5 +1,5 @@
 {
-  "name": "rally-orb-poc",
+  "name": "@rally/map",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -30,7 +30,7 @@
     "@vitejs/plugin-react": "^6.1.0",
     "oxlint": "^1.79.0",
     "playwright": "^1.62.1",
-    "typescript": "~6.0.2",
+    "typescript": "6.0.3",
     "vite": "^8.2.2",
     "vitest": "4.1.11"
   }

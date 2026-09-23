@@ -1,5 +1,5 @@
 import { chromium } from 'playwright'
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })

@@ -12,9 +12,12 @@
 //      eye-hand-mix no gaze move within 600 ms of the scripted hand release
 //      eye-lost     the channel holds then decays and never emits release
 //  - no page errors anywhere; a showDebug screenshot for the human gate.
+// page.evaluate bodies run in the browser; the monorepo's ESLint config
+// gives scripts/ Node globals only.
+/* global URL, document, performance, requestAnimationFrame, window */
 import { chromium } from 'playwright'
 
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 const W = 1440
 const H = 900

@@ -13,10 +13,13 @@
 // whole frame: robust to the few big discs and near-camera trails that a
 // corner-point sample lands on by chance (six corner points read 40.9/255 on
 // a frame whose median was 9.0). Before the pass the median at 7x was 88/255.
+// page.evaluate bodies run in the browser; the monorepo's ESLint config
+// gives scripts/ Node globals only.
+/* global document, window */
 import { chromium } from 'playwright'
 import { pathToFileURL } from 'url'
 
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 const WHITE_BOUND = 0.0128 // prototype parity (PORT_LOG P4)
 const ZOOM_BG_BOUND = 0.1  // median frame luminance at 7x zoom ≤ 10% (25.5/255): the typical pixel is still black
@@ -55,7 +58,6 @@ const measure = async (path, fn) => {
     c.height = img.naturalHeight
     const ctx = c.getContext('2d')
     ctx.drawImage(img, 0, 0)
-    // eslint-disable-next-line no-new-func
     return new Function('ctx', 'w', 'h', src)(ctx, img.naturalWidth, img.naturalHeight)
   }, fn)
 }

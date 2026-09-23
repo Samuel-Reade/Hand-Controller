@@ -833,7 +833,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
       tupleHash: tupleHash(generationTuple()),
       seed: NCONF.generation.seed,
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [genVersion])
 
   const drill = useRef<DrillState>({
@@ -1535,7 +1535,7 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     }
 
     // ── Selection ─────────────────────────────────────────────────────────
-    let candidate: string | null = null
+    let candidate: string | null
     if (d.level === 0) {
       // Reticle over the hub shell; affordance rides iState (§7).
       const r = resolveReticle(built.hubDirList, physics.yaw, physics.pitch)

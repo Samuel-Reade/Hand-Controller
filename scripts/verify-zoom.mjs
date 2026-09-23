@@ -6,10 +6,13 @@
 // Z3: zoomIn commits level 0 -> 1, zoomOut commits 1 -> 0 (screenshots);
 //     the camera is continuous at each commit; 60fps; zero page errors;
 //     frozen diffs empty on physics + the single-hand gesture machine.
+// page.evaluate bodies run in the browser; the monorepo's ESLint config
+// gives scripts/ Node globals only.
+/* global clearInterval, document, performance, setInterval, window */
 import { execSync } from 'child_process'
 import { chromium } from 'playwright'
 
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 
 const browser = await chromium.launch({ args: ['--use-angle=metal'] })
@@ -100,7 +103,9 @@ let frozenClean = false
 try {
   execSync('git diff --quiet -- src/input/gestureMachine.ts src/orb/useOrbPhysics.ts src/orb/Orb.tsx', { stdio: 'ignore' })
   frozenClean = true
-} catch {}
+} catch {
+  // non-zero exit: a frozen file has a diff
+}
 check('frozen diffs empty: gestureMachine.ts, useOrbPhysics.ts, Orb.tsx', frozenClean, '')
 
 let ok = true

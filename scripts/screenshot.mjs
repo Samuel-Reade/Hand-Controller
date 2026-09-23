@@ -3,7 +3,7 @@
 // server already up: node scripts/screenshot.mjs <baseURL> <outDir>
 import { chromium } from 'playwright'
 
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 const states = [
   { name: 'state-home', q: 'yaw=0&pitch=0' },

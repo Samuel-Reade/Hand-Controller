@@ -34,3 +34,6 @@ node_modules 2
 
 # Verification screenshots: the ones PORT_LOG.md cites are committed; new ones stay local
 shots/
+
+# MediaPipe wasm is served from node_modules by vite.config.ts; never vendor it
+public/mediapipe/

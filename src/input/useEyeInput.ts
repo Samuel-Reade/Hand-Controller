@@ -124,13 +124,17 @@ export function eyeRecentre(): Promise<string> {
 }
 
 /** Module controller so the hand shell and the harness can drive the channel. */
-export const eyeControl = {
+export const eyeControl: {
   /** run the model on this frame (no-op unless enabled + model ready) */
-  detect: (_video: HTMLVideoElement, _nowMs: number): void => {},
+  detect: (video: HTMLVideoElement, nowMs: number) => void
   /** feed a frame (or none) straight into the channel - the harness path */
-  feed: (_frame: FaceFrame | null, _nowMs: number): void => {},
+  feed: (frame: FaceFrame | null, nowMs: number) => void
   /** camera stopped: drop the model and the channel state */
-  stop: (): void => {},
+  stop: () => void
+} = {
+  detect: () => {},
+  feed: () => {},
+  stop: () => {},
 }
 
 /** The channel singleton - created here, read by the HUD via eyeRuntime. */
@@ -230,9 +234,9 @@ export function useEyeInput(bus: InputBus): void {
       loading = (async () => {
         try {
           const vision = await import('@mediapipe/tasks-vision')
-          const fileset = await vision.FilesetResolver.forVisionTasks('/mediapipe/wasm')
+          const fileset = await vision.FilesetResolver.forVisionTasks(`${import.meta.env.BASE_URL}mediapipe/wasm`)
           const options = {
-            baseOptions: { modelAssetPath: '/models/face_landmarker.task', delegate: 'GPU' as const },
+            baseOptions: { modelAssetPath: `${import.meta.env.BASE_URL}models/face_landmarker.task`, delegate: 'GPU' as const },
             numFaces: 1,
             outputFaceBlendshapes: true,
             outputFacialTransformationMatrixes: true,

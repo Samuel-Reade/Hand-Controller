@@ -26,8 +26,6 @@
     }
   ],
   "ignorePatterns": [
-    "public/mediapipe/**",
-    "reference/**",
-    "POC F Ref /**"
+    "reference/**"
   ]
 }

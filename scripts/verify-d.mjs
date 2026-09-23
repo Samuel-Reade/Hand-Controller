@@ -1,9 +1,12 @@
 // Slice D verification with a fake webcam: consent affordance -> camera
 // starts -> wasm + landmarker load -> HUD thumbnail live -> no hand found
 // -> SEARCHING. Also: disable returns to the affordance.
+// page.evaluate bodies run in the browser; the monorepo's ESLint config
+// gives scripts/ Node globals only.
+/* global document */
 import { chromium } from 'playwright'
 
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 const browser = await chromium.launch({
   args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],

@@ -13,9 +13,12 @@
 // profile back to PT2), so the settled rotations are the old grid's, not
 // arbitrary. This script therefore samples the rotations the detents
 // actually reach rather than asking for angles the physics will not hold.
+// page.evaluate bodies run in the browser; the monorepo's ESLint config
+// gives scripts/ Node globals only.
+/* global document, window */
 import { chromium } from 'playwright'
 
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 const ACQUIRE_RADIUS = 46 // NCONF.point.acquireRadius default
 const RELEASE_RADIUS = 88 // NCONF.point.releaseRadius default - hysteresis HOLDS a node out to here

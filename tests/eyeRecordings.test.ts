@@ -3,12 +3,15 @@
 // parses": the numbers are for the human gate and the tuning passes.
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { EYE_DEFAULTS } from '../src/input/eye/config'
 import { formatMetrics, replayRecording } from '../src/input/eye/replay'
 import type { EyeRecording } from '../src/input/eye/replay'
 
-const dir = join(process.cwd(), 'recordings')
+// Anchored to this file, not the cwd: a run from a workspace root would
+// otherwise find no recordings and skip silently.
+const dir = fileURLToPath(new URL('../recordings', import.meta.url))
 const files = (() => {
   try {
     return readdirSync(dir).filter((f) => f.endsWith('.json'))

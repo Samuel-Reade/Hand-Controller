@@ -46,7 +46,7 @@ are FEEL profiles over one integrator, never a fork.
 
 **Camera pipeline (hands).** `useHandInput` owns `getUserMedia` (640×480 @ 30 fps), creates a
 MediaPipe `HandLandmarker` from `@mediapipe/tasks-vision` 1.0.1 with assets vendored under
-`/public/models/hand_landmarker.task` and `/public/mediapipe/wasm` (nothing leaves the device),
+`/public/models/hand_landmarker.task` and the `@mediapipe/tasks-vision` wasm, served from `node_modules` by `vite.config.ts` (nothing leaves the device),
 GPU delegate with CPU fallback, detection at camera rate via `requestVideoFrameCallback`,
 auto-stop after 20 s with no hand, a consent affordance (never a modal wall, never on load), and
 a status enum in the store (`off | starting | on | stopped | denied | error`). A thumbnail shows

@@ -1,6 +1,7 @@
 # Handoff: eye-tracking look selector (2026-09-15)
 
-Paste into a new Claude Code chat opened in /Users/samreade/company_map.
+Paste into a new Claude Code chat opened at the app root (this repo, or `apps/map` in the
+Rally monorepo).
 
 ## Who / what
 Sam (they/them) is building Rally's 3D "neural constellation" (React 19 + react-three-fiber,
@@ -31,7 +32,7 @@ violet is for controls only; the 3D field's only job is salience.
     HUD "RECORD 10 S" button; `tsconfig.tests.json` gained node types.
   - `docs/EYE_ACCURACY_PLAN.md`, DECISIONS/PORT_LOG entries for all of it.
 - Tests: 244 pass (`npx vitest run`). Gates: `node scripts/verify-eye.mjs` 11/11,
-  `node scripts/verify-centering.mjs` 13/13 (need `npx vite` up on :5173). Lint `npx oxlint src
+  `node scripts/verify-centering.mjs` 13/13 (need `npx vite` up on :3300). Lint `npx oxlint src
   tests`, types `npx tsc -b`.
 
 ## Where the code lives

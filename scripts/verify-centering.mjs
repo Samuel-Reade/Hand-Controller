@@ -12,9 +12,12 @@
 // clicking a field node at level 1 drills out and centres it; Escape
 // returns to the centre node from a selected post AND from a drill; the
 // globe scene's tap still opens the focused report.
+// page.evaluate bodies run in the browser; the monorepo's ESLint config
+// gives scripts/ Node globals only.
+/* global document, getComputedStyle, window */
 import { chromium } from 'playwright'
 
-const base = process.argv[2] ?? 'http://localhost:5173'
+const base = process.argv[2] ?? 'http://localhost:3300'
 const outDir = process.argv[3] ?? 'shots'
 const W = 1440
 const H = 900
