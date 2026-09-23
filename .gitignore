@@ -31,3 +31,6 @@ node_modules 2
 
 # Playwright MCP screenshots, snapshots and console logs
 .playwright-mcp
+
+# Verification screenshots: the ones PORT_LOG.md cites are committed; new ones stay local
+shots/
