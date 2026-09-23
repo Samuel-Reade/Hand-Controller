@@ -206,6 +206,9 @@ export function taperRadius(t: number, base: number, cfg: NeuralConfig = NCONF):
   return base * (cfg.trail.taperBase + (1 - cfg.trail.taperBase) * Math.abs(2 * t - 1) ** cfg.trail.taperExp)
 }
 
+/** Rings along each trail per pass. */
+export const TRAIL_SEGS = { core: 48, glow: 32 } as const
+
 const HOT = new Color(TRAIL_HOT)
 const BASE = new Color(TRAIL_BASE)
 
@@ -250,7 +253,9 @@ export function buildTrailGeometry(
   pass: 'core' | 'glow',
   cfg: NeuralConfig = NCONF,
 ): BufferGeometry {
-  const SEGS = pass === 'core' ? 18 : 12
+  // dense enough that the ripple's swell (sigma flowWidth in t) is a
+  // smooth bulge, not a kinked segment
+  const SEGS = pass === 'core' ? TRAIL_SEGS.core : TRAIL_SEGS.glow
   const RAD = 5
   const ringVerts = RAD + 1
   const vertsPerTrail = (SEGS + 1) * ringVerts
@@ -362,7 +367,35 @@ export function buildTrailGeometry(
   return geo
 }
 
+// The energy band's profile at trail parameter t: a gaussian in circular
+// distance, travelling at the post's momentum-boosted rate. Shared by the
+// vertex (the swell) and fragment (the light) stages so they move as one.
+// Mirrored in flowBandPosition().
+const FLOW_BAND = /* glsl */ `
+  uniform float uTime;
+  uniform float uFlowWidth;
+  uniform float uFlowPeriod;
+  uniform float uFlowInward;
+  uniform float uFlowRateBoost;
+  uniform float uFlowFloor;
+  // how strongly a trail carries the band: every trail ripples (user
+  // direction 2026-09-22: "make sure they all do"), a still post's at
+  // uFlowFloor; momentum lifts it to full and speeds it up (RALLY §5)
+  float flowStrength(float m) {
+    return mix(uFlowFloor, 1.0, m);
+  }
+  float flowBand(vec4 f) {
+    float dir = uFlowInward > 0.5 ? -1.0 : 1.0;
+    float rate = (1.0 + uFlowRateBoost * f.z) / uFlowPeriod;
+    float band = fract(f.x - dir * (uTime * rate + f.y));
+    float d = min(band, 1.0 - band);
+    return exp(-(d * d) / (2.0 * uFlowWidth * uFlowWidth));
+  }
+`
+
 const TRAIL_VERT = /* glsl */ `
+  ${FLOW_BAND}
+  uniform float uFlowSwell;
   uniform float uR;
   uniform float uRangeMult;
   uniform float uFloor;
@@ -397,7 +430,12 @@ const TRAIL_VERT = /* glsl */ `
     float rPx = max(1e-4, r * pxPerWu);
     float widen = max(1.0, uMinRadiusPx / rPx);
     float narrow = min(1.0, uMaxRadiusPx / (rPx * widen));
-    float scale = widen * narrow;
+    // Ripple (2026-09-22, replaces the 7.10 hot dots): the band swells the
+    // tube as it passes - something travelling through the line. After the
+    // hairline/cap clamps, so the bulge reads at the rest view and a capped
+    // filament still ripples. Strength follows the light (flowStrength).
+    float swell = 1.0 + uFlowSwell * flowStrength(aFlow.z) * flowBand(aFlow);
+    float scale = widen * narrow * swell;
     vec3 p = aAxis + arm * scale;
     vec4 wp = modelMatrix * vec4(p, 1.0);
     float range = uR * uRangeMult;
@@ -413,13 +451,9 @@ const TRAIL_VERT = /* glsl */ `
   }
 `
 const TRAIL_FRAG = /* glsl */ `
+  ${FLOW_BAND}
   uniform float uOpacity;
-  uniform float uTime;
   uniform float uFlowGain;
-  uniform float uFlowWidth;
-  uniform float uFlowPeriod;
-  uniform float uFlowInward;
-  uniform float uFlowRateBoost;
   uniform float uFilamentPow;
   uniform float uFilamentGain;
   uniform float uFilamentFromPx;
@@ -437,14 +471,11 @@ const TRAIL_FRAG = /* glsl */ `
     // band child -> parent so energy converges on the brain, +1 radiates out.
     // Circular distance so the band wraps cleanly; it brightens the authored
     // colour rather than recolouring it, so red trails stay red. Per
-    // fragment, from a clock uniform - zero JS. Mirrored in flowBandPosition().
-    // RALLY §5: the band is the momentum channel's comet-tail - only a moving
-    // shout's trail carries it (x vFlow.z), and faster with more momentum.
-    float dir = uFlowInward > 0.5 ? -1.0 : 1.0;
-    float rate = (1.0 + uFlowRateBoost * vFlow.z) / uFlowPeriod;
-    float band = fract(vFlow.x - dir * (uTime * rate + vFlow.y));
-    float d = min(band, 1.0 - band);
-    float flow = uFlowGain * vFlow.z * exp(-(d * d) / (2.0 * uFlowWidth * uFlowWidth));
+    // fragment, from a clock uniform - zero JS. The vertex stage swells the
+    // tube under the same band (the ripple).
+    // RALLY §5: the band is the momentum channel's comet-tail - every trail
+    // carries it, a moving shout's stronger and faster (flowStrength).
+    float flow = uFlowGain * flowStrength(vFlow.z) * flowBand(vFlow);
     // Traction sets the BASE (vFlow.w: hairline for a minor post, full for a
     // popular one); the momentum band adds at full strength regardless, so a
     // small post that starts moving still shows its comet-tail.
@@ -484,10 +515,12 @@ export function createTrailMaterial(pass: 'core' | 'glow'): ShaderMaterial {
       uOpacity: { value: pass === 'core' ? NCONF.trail.coreOpacity : NCONF.trail.glowOpacity },
       uTime: { value: 0 },
       uFlowGain: { value: NCONF.trail.flowEnabled ? NCONF.trail.flowGain : 0 },
+      uFlowSwell: { value: NCONF.trail.flowEnabled ? NCONF.trail.flowSwell : 0 },
       uFlowWidth: { value: NCONF.trail.flowWidth },
       uFlowPeriod: { value: NCONF.trail.flowPeriod },
       uFlowInward: { value: NCONF.trail.flowInward ? 1 : 0 },
       uFlowRateBoost: { value: NCONF.momentum.pulseRateBoost },
+      uFlowFloor: { value: NCONF.trail.flowFloor },
       uViewportH: { value: 900 }, // set per frame from the drawing buffer
       uTanHalfFov: { value: Math.tan((NCONF.camera.fov * Math.PI) / 360) },
       uMinRadiusPx: { value: NCONF.trail.minRadiusPx },
@@ -523,10 +556,12 @@ export function syncTrailUniforms(core: ShaderMaterial, glow: ShaderMaterial, ti
     m.uniforms.uFloor.value = NCONF.depth.opacityFloor
     m.uniforms.uTime.value = timeSec
     m.uniforms.uFlowGain.value = gain
+    m.uniforms.uFlowSwell.value = NCONF.trail.flowEnabled ? Math.max(0, NCONF.trail.flowSwell) : 0
     m.uniforms.uFlowWidth.value = Math.max(0.005, NCONF.trail.flowWidth)
     m.uniforms.uFlowPeriod.value = Math.max(0.1, NCONF.trail.flowPeriod)
     m.uniforms.uFlowInward.value = NCONF.trail.flowInward ? 1 : 0
     m.uniforms.uFlowRateBoost.value = NCONF.momentum.pulseRateBoost
+    m.uniforms.uFlowFloor.value = Math.min(1, Math.max(0, NCONF.trail.flowFloor))
   }
   core.uniforms.uOpacity.value = NCONF.trail.coreOpacity
   glow.uniforms.uOpacity.value = NCONF.trail.glowOpacity

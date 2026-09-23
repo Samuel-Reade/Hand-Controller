@@ -10,7 +10,7 @@ import { buildGraph, nodePosition } from '../src/neural/graph'
 import { momentumFor, nameUnit } from '../src/neural/momentum'
 import { buildStarGeometry } from '../src/neural/starField'
 import type { StarInstance } from '../src/neural/starField'
-import { buildTrailGeometry, buildTrailSpecs, flowBandPosition } from '../src/neural/trails'
+import { TRAIL_SEGS, buildTrailGeometry, buildTrailSpecs, flowBandPosition } from '../src/neural/trails'
 
 const nodes = buildGraph()
 
@@ -110,7 +110,7 @@ describe('trail energy band: aFlow = (t, phase, child momentum, traction weight)
       const flow = geo.getAttribute('aFlow')
       expect(flow.itemSize).toBe(4)
       expect(flow.count).toBe(geo.getAttribute('position').count)
-      const SEGS = pass === 'core' ? 18 : 12
+      const SEGS = TRAIL_SEGS[pass]
       const ringVerts = 6
       const perTrail = flow.count / specs.length
       expect(perTrail).toBe((SEGS + 1) * ringVerts)

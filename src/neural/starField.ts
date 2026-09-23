@@ -343,12 +343,13 @@ const FRAG = /* glsl */ `
     float aPin = min(1.0, vOpa.z * 0.85) * (1.0 - smoothstep(pinR - px, pinR, r)) * (1.0 - max(vDetail, vBokeh));
     body = srcOver(vec4(1.0, 1.0, 1.0, aPin), body);
 
-    // Spikes: the anchor's §6 dominance cross at full length; posts above
-    // uSpikeAbove (rallies) get the same cross at uSpikeScale - the bright-
-    // star signature for the shouts that matter. uSpikeAbove > 1 = anchor only.
-    float spikeGate = uAnchor > 0.5 ? 1.0 : smoothstep(uSpikeAbove - 0.08, uSpikeAbove, vRallies);
+    // Spikes: posts above uSpikeAbove (rallies) get a diffraction cross at
+    // uSpikeScale of uSpikeLen - the bright-star signature for the shouts
+    // that matter. The anchor has none (user direction 2026-09-22); its
+    // dominance is the corona boost and pulse. uSpikeAbove > 1 = no spikes.
+    float spikeGate = uAnchor > 0.5 ? 0.0 : smoothstep(uSpikeAbove - 0.08, uSpikeAbove, vRallies);
     if (spikeGate > 0.001) {
-      float lenMul = uAnchor > 0.5 ? 1.0 : uSpikeScale;
+      float lenMul = uSpikeScale;
       vec3 spikeCol = mix(vBody, vec3(1.0), 0.65);
       float wL = dr * 0.10;
       float wS = dr * 0.07;

@@ -63,10 +63,10 @@ export interface NeuralConfig {
     // "Powerful" (user direction 2026-09-10) - rallies-driven, so only the
     // posts that matter get it. blaze: corona + bloom alpha x (1 + blaze r^2);
     // blazeSpread: the glow footprint x (1 + spread r) while the DISC (size
-    // channel) stays put; spikes: the bright-star diffraction cross the
-    // anchor has, on posts above spikeAbove (1.01 = anchor only), at
-    // spikeScale of the anchor's length. The anchor itself is exempt from
-    // blaze/spread (its dominance treatment is §6's).
+    // channel) stays put; spikes: a bright-star diffraction cross on posts
+    // above spikeAbove (1.01 = none), at spikeScale of anchor.spikeLength.
+    // The anchor itself is exempt from blaze/spread/spikes (its dominance
+    // treatment is §6's corona + pulse; spikes removed 2026-09-22).
     blaze: number
     blazeSpread: number
     spikeAbove: number
@@ -201,7 +201,7 @@ export interface NeuralConfig {
     bendFraction: number
     taperBase: number      // trail.taperProfile = (taperBase, taperExp)
     taperExp: number
-    pulseEnabled: boolean  // brain→hub only (ruling 7.10)
+    pulseEnabled: boolean  // brain→hub hot dots (ruling 7.10); OFF since 2026-09-22 - the ripple (flowSwell) carries the flow
     beadsEnabled: boolean  // ruling 7.9 kept them; OFF since 2026-09-10 (user: "no circles at the end of the strings")
     // Where a trail ends, as a fraction of the node's visible disc radius:
     // 0 = the node's centre - the string runs into the core (user direction
@@ -242,20 +242,27 @@ export interface NeuralConfig {
     radDefault: number
     // Energy flow (visual pass): a soft band of brightness travelling along
     // EVERY trail, evaluated per fragment from a clock uniform - zero
-    // per-frame JS, no geometry motion. flowInward also steers the
-    // ruling-7.10 hot dots (brain<->hub) so every moving thing agrees.
+    // per-frame JS. The same band swells the tube in the vertex shader
+    // (flowSwell): a ripple travelling through the line (user direction
+    // 2026-09-22: "something is flowing through it", replacing the dots).
+    // flowInward also steers the ruling-7.10 hot dots (brain<->hub) so
+    // every moving thing agrees.
     // A post's spoke follows its traction: base brightness = spokeMinWeight +
     // (1 - spokeMinWeight) x t^2 (t = rallies^sizeGamma) and radius x
     // (0.5 + 0.5 t), so 160 spokes read as a few bright lines and many
     // hairlines instead of a dandelion. Quadratic on purpose: linear at 0.25
     // still lit the median post's spoke at ~45% and the starburst stayed.
     // The momentum band is NOT weighted - a moving minor post still shows it.
+    // Every trail carries the band (user direction 2026-09-22); a still
+    // post's at flowFloor of full strength, momentum lifting it to 1.
     spokeMinWeight: number
     flowEnabled: boolean
     flowInward: boolean    // true: node -> parent -> brain (energy converges on the anchor); false: radiates out
     flowGain: number       // peak brightness lift (1 = 2x)
     flowWidth: number      // band sigma in trail parameter t (0..1)
     flowPeriod: number     // seconds per traversal
+    flowSwell: number      // tube radius x (1 + flowSwell x strength) at the band's peak; 0 = light only
+    flowFloor: number      // band strength on a still post's trail (0 = moving posts only, the old gate)
   }
   camera: { z: number; fov: number }
   scene: { initialPitch: number; pitchClamp: number }
@@ -408,17 +415,17 @@ export const NCONF: NeuralConfig = {
   rallies: { popularFraction: 0.12, minorMax: 0.15, popularMin: 0.4, sizeGamma: 0.6, diamMin: 13, diamMax: 104 },
   momentum: { movingFraction: 0.1, glow: 0.6, pulsePeriod: 5.5, pulseRateBoost: 1.5 },
   trail: {
-    coreOpacity: 0.72,
-    glowOpacity: 0.22,
+    coreOpacity: 0.9, // 0.72 -> 0.9 (2026-09-22: "make the connecting strings more visible")
+    glowOpacity: 0.3,
     glowRadiusMult: 3.2,
     bendFraction: 0.1,
     taperBase: 0.55,
     taperExp: 1.5,
-    pulseEnabled: true,
+    pulseEnabled: false,
     beadsEnabled: false,
     endInset: 0,
     bodyFade: 1.0,
-    minRadiusPx: 0.6,
+    minRadiusPx: 0.8,
     maxRadiusPx: 6,
     filamentPow: 1.5,
     filamentGain: 1.5,
@@ -430,12 +437,16 @@ export const NCONF: NeuralConfig = {
     // the starburst; a popular post's spoke is still the thickest line drawn.
     radByTier: { brain: 1.2, hub: 1.1, node: 0.65, sub: 0.35, terminal: 0.3 },
     radDefault: 0.3,
-    spokeMinWeight: 0.06,
+    // 0.06 -> 0.22 (2026-09-22): a minor post's string read as absent, not
+    // thin; popular spokes still lead at 1.0
+    spokeMinWeight: 0.22,
     flowEnabled: true,
     flowInward: true, // user direction 2026-09-09: reports feed the brain, not the other way
     flowGain: 0.9,
     flowWidth: 0.06,
     flowPeriod: 7,
+    flowSwell: 1.6,
+    flowFloor: 0.6,
   },
   camera: { z: 4600, fov: 52 }, // outside the field: max node r=1856 needs z>=4234 to fit the fov
   scene: { initialPitch: -0.18, pitchClamp: 1.1 },
