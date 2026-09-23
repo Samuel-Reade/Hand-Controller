@@ -28,3 +28,6 @@ node_modules.nosync
 
 # macOS duplicate folder
 node_modules 2
+
+# Playwright MCP screenshots, snapshots and console logs
+.playwright-mcp

@@ -3,6 +3,7 @@
 // come near this store; they live in orbRuntime and are mutated per frame.
 
 import { create } from 'zustand'
+import { FLAGS } from './config/flags'
 import type { FocusRef } from './orb/geometry'
 
 export type InputMode = 'pointer' | 'hand' | 'synthetic'
@@ -37,6 +38,8 @@ interface AppState {
   eyeCalibrating: boolean // the calibration flow is on screen (gaze pointer suspended)
   eyeCalResult: string | null // last calibration outcome for the HUD ("CAL 38PX" / "CAL FAILED")
   eyeDrill: { x: number; y: number } | null // the saccade drill's ring (dev recorder), shown while it records
+  eyeRecentring: boolean // the one-look re-centre is sampling (its centre ring is on screen)
+  eyeRecentreResult: string | null // the last re-centre's outcome for the HUD, shown briefly
   setFocus(focus: FocusRef): void
   openFocused(): void
   openNode(node: string, tier: string): void
@@ -51,6 +54,8 @@ interface AppState {
   setEyeCalibrating(eyeCalibrating: boolean): void
   setEyeCalResult(eyeCalResult: string | null): void
   setEyeDrill(eyeDrill: { x: number; y: number } | null): void
+  setEyeRecentring(eyeRecentring: boolean): void
+  setEyeRecentreResult(eyeRecentreResult: string | null): void
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -66,6 +71,8 @@ export const useStore = create<AppState>((set, get) => ({
   eyeCalibrating: false,
   eyeCalResult: null,
   eyeDrill: null,
+  eyeRecentring: false,
+  eyeRecentreResult: null,
   setFocus: (focus) => set({ focus }),
   openFocused: () => {
     const { focus } = get()
@@ -79,8 +86,16 @@ export const useStore = create<AppState>((set, get) => ({
   setHandEngaged: (handEngaged) => set({ handEngaged }),
   setHandCount: (handCount) => set({ handCount }),
   setHandZoom: (handZoom) => set({ handZoom }),
-  setEyeEnabled: (eyeEnabled) => set({ eyeEnabled, ...(eyeEnabled ? {} : { eyeCalibrating: false, eyeCalResult: null, eyeDrill: null }) }),
+  // The eye flag (config/flags.ts) is the one gate: with it off nothing can
+  // turn eye control on - not the HUD, leva, ?eye=1 nor the harness - so the
+  // face model, the gaze pointer and the voice commands never start.
+  setEyeEnabled: (on) => {
+    const eyeEnabled = on && FLAGS.eye
+    set({ eyeEnabled, ...(eyeEnabled ? {} : { eyeCalibrating: false, eyeCalResult: null, eyeDrill: null, eyeRecentring: false, eyeRecentreResult: null }) })
+  },
   setEyeCalibrating: (eyeCalibrating) => set({ eyeCalibrating }),
   setEyeCalResult: (eyeCalResult) => set({ eyeCalResult }),
   setEyeDrill: (eyeDrill) => set({ eyeDrill }),
+  setEyeRecentring: (eyeRecentring) => set({ eyeRecentring }),
+  setEyeRecentreResult: (eyeRecentreResult) => set({ eyeRecentreResult }),
 }))

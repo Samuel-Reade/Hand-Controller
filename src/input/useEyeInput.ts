@@ -13,7 +13,7 @@ import type { InputBus, InputEvent } from './InputBus'
 import { cursorRuntime } from './cursor'
 import { createOnlineCalibration, learnAllowed, learnConfirm } from './eye/calibration'
 import type { CalibrationSample, LearnSource, OnlineCalibration } from './eye/calibration'
-import { createEyeChannel, eyeRuntime } from './eye/channel'
+import { createEyeChannel, eyeRuntime, recentreOffset } from './eye/channel'
 import type { EyeChannel, EyeContext, EyeTelemetry } from './eye/channel'
 import { EYE } from './eye/config'
 import { screenPointDefault } from './eye/face'
@@ -46,6 +46,7 @@ export const eyeOnline: { state: OnlineCalibration } = { state: createOnlineCali
 export function eyeSetBase(samples: CalibrationSample[], cal: OnlineCalibration['cal']): void {
   eyeOnline.state = { base: samples, learned: [], cal, rejected: 0 }
   eyeChannel.calibration = cal
+  eyeChannel.offset = { x: 0, y: 0 } // a new map: the old re-centre measured the old one
   if (import.meta.env.DEV) window.__eyeOnline = eyeOnline.state
 }
 
@@ -57,7 +58,10 @@ export function eyeSetBase(samples: CalibrationSample[], cal: OnlineCalibration[
 export function eyeLearn(targetX: number, targetY: number, source: LearnSource = 'gaze'): void {
   if (!eyeChannel.enabled || !learnAllowed(EYE, eyeRuntime, source)) return
   const viewport = { w: window.innerWidth, h: window.innerHeight }
-  const sample: CalibrationSample = { features: { ...eyeRuntime.features }, target: { x: targetX, y: targetY } }
+  // The map lives BEFORE the standing nudge and the re-centre: teach it the
+  // target without them, or the refit would absorb them and they would count twice.
+  const { x: ox, y: oy } = eyeChannel.offset
+  const sample: CalibrationSample = { features: { ...eyeRuntime.features }, target: { x: targetX - ox, y: targetY - EYE.pointBiasYPx - oy } }
   const { state, changed, report } = learnConfirm(
     eyeOnline.state, sample, EYE, (f) => screenPointDefault(f, EYE, viewport), viewport,
   )
@@ -72,6 +76,51 @@ export function eyeLearn(targetX: number, targetY: number, source: LearnSource =
     window.__eyeOnline = eyeOnline.state
     console.info('[eye] learn', { source, changed, kept: state.learned.length, rejected: state.rejected, residualPx: report?.residualPx })
   }
+}
+
+/** Fed every processed frame while a re-centre samples (null otherwise). */
+let recentreSink: (() => void) | null = null
+let recentreLabelTimer: ReturnType<typeof setTimeout> | undefined
+
+/**
+ * One-look re-centre (Sam 2026-09-22, "it drifts a lot"): a ring shows at
+ * the screen centre; after recentreSettleMs the gaze point is sampled for
+ * recentreWindowMs; the shift that puts its median on the centre becomes
+ * the channel's offset. Resolves with the HUD label.
+ */
+export function eyeRecentre(): Promise<string> {
+  const store = useStore.getState()
+  if (!eyeChannel.enabled || EYE.mode !== 'point' || store.eyeCalibrating || store.eyeRecentring) return Promise.resolve('')
+  store.setEyeRecentring(true)
+  store.setEyeRecentreResult(null)
+  const t0 = performance.now()
+  const points: { x: number; y: number }[] = []
+  recentreSink = () => {
+    if (performance.now() - t0 < EYE.recentreSettleMs) return
+    const t = eyeRuntime
+    if (t.facePresent && (t.irisOkL || t.irisOkR) && t.eyesShutMs === 0) points.push({ x: t.gazeX, y: t.gazeY })
+  }
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      recentreSink = null
+      const viewport = { w: window.innerWidth, h: window.innerHeight }
+      const r = recentreOffset(points, { x: viewport.w / 2, y: viewport.h / 2 }, eyeChannel.offset, EYE)
+      let label: string
+      if ('offset' in r) {
+        eyeChannel.offset = r.offset
+        label = `CENTRED ${Math.round(r.shift.x)},${Math.round(r.shift.y)}`
+      } else {
+        label = r.error === 'few' ? 'NO GAZE - TRY AGAIN' : 'TOO FAR - CALIBRATE'
+      }
+      if (import.meta.env.DEV) console.info('[eye] re-centre', { samples: points.length, result: r })
+      const s = useStore.getState()
+      s.setEyeRecentring(false)
+      s.setEyeRecentreResult(label)
+      clearTimeout(recentreLabelTimer)
+      recentreLabelTimer = setTimeout(() => useStore.getState().setEyeRecentreResult(null), 2500)
+      resolve(label)
+    }, EYE.recentreSettleMs + EYE.recentreWindowMs)
+  })
 }
 
 /** Module controller so the hand shell and the harness can drive the channel. */
@@ -113,6 +162,7 @@ export function useEyeInput(bus: InputBus): void {
       }
     }
     const emitAll = (events: InputEvent[]) => {
+      recentreSink?.()
       for (const e of events) bus.emit(e)
       logState()
     }
@@ -145,7 +195,7 @@ export function useEyeInput(bus: InputBus): void {
             eyeChannel.record = null
             const rec: EyeRecording = {
               frames, viewport: { w: window.innerWidth, h: window.innerHeight }, label,
-              calibration: eyeChannel.calibration, calSamples: eyeOnline.state.base, ...(truth ? { truth } : {}),
+              calibration: eyeChannel.calibration, calSamples: eyeOnline.state.base, offset: { ...eyeChannel.offset }, ...(truth ? { truth } : {}),
             }
             save(rec, label)
             resolve(rec)
@@ -257,6 +307,10 @@ export function useEyeInput(bus: InputBus): void {
     // Arbitration input: everything on the bus the channel did not emit
     // (the channel filters its own by source tag). DEV: log every event.
     const offBus = bus.on((e) => {
+      if (e.type === 'recentre') {
+        void eyeRecentre()
+        return
+      }
       eyeChannel.onBus(e, performance.now())
       if (import.meta.env.DEV) {
         window.__eyeLog?.push({
@@ -277,6 +331,7 @@ export function useEyeInput(bus: InputBus): void {
         dropModel()
         eyeOnline.state = createOnlineCalibration()
         eyeChannel.calibration = null
+        eyeChannel.offset = { x: 0, y: 0 }
       }
     }
     apply(useStore.getState().eyeEnabled)

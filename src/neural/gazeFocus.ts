@@ -42,6 +42,14 @@ export interface GazeFocusConfig {
   releaseFactor: number
   /** a rival must beat the current focus's score by this factor (< 1) to start the switch clock */
   switchMargin?: number
+  /**
+   * Hop mode: the focus always sits on a node. With none, the nearest node
+   * (any distance) is the rival; once held it is never dropped for the gaze
+   * wandering into empty space - only for leaving the candidates (off
+   * screen) - and it changes only by a rival winning its own cone. The
+   * caller passes every visible node, not only those near the gaze.
+   */
+  hop?: boolean
 }
 
 /** One frame. Returns the new state; does not mutate the input. */
@@ -53,15 +61,17 @@ export function stepGazeFocus(
 ): GazeFocusState {
   let best: GazeCandidate | null = null
   let bestScore = Infinity
+  let { name, since, rival, rivalSince, lostSince, dwelled } = s
+  // with no focus, hop mode takes the nearest node however far the gaze is
+  const anyDistance = cfg.hop === true && name === null
   for (const c of cands) {
     if (c.r <= 0) continue
     const score = c.dist / c.r
-    if (score <= 1 && score < bestScore) {
+    if ((anyDistance || score <= 1) && score < bestScore) {
       bestScore = score
       best = c
     }
   }
-  let { name, since, rival, rivalSince, lostSince, dwelled } = s
 
   // the rival: the best candidate that is not the current focus - and,
   // while a focus is held, one that beats it by the switch margin (a
@@ -81,7 +91,7 @@ export function stepGazeFocus(
   // release: the focus has left its (wider) cone for holdMs
   if (name) {
     const cur = cands.find((c) => c.name === name)
-    const out = !cur || cur.r <= 0 || cur.dist / cur.r > cfg.releaseFactor
+    const out = !cur || cur.r <= 0 || (!cfg.hop && cur.dist / cur.r > cfg.releaseFactor)
     if (out) {
       if (lostSince === null) lostSince = nowMs
       if (nowMs - lostSince >= cfg.holdMs) {

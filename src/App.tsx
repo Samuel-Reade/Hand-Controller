@@ -5,6 +5,7 @@ import { EYE } from './input/eye/config'
 import { useEyeInput } from './input/useEyeInput'
 import { useHandInput } from './input/useHandInput'
 import { useKeyboardInput } from './input/useKeyboardInput'
+import { useVoiceInput } from './input/useVoiceInput'
 import { usePointerInput } from './input/usePointerInput'
 import { LabelLayer } from './orb/LabelLayer'
 import { NCONF } from './neural/config'
@@ -16,6 +17,7 @@ import { Reticle } from './orb/Reticle'
 import { FEEL, motionPrefs } from './config/feel'
 import { useStore } from './store'
 import { CameraConsent } from './ui/CameraConsent'
+import { FLAGS } from './config/flags'
 import { EyeCalibration } from './ui/EyeCalibration'
 import { EyeControls } from './ui/EyeControls'
 import { EyeDebug } from './ui/EyeDebug'
@@ -57,6 +59,7 @@ export default function App() {
   useKeyboardInput(bus)
   useHandInput(bus)
   useEyeInput(bus) // ORB_EYE_SPEC: rides the hand shell's frames; never opens a camera
+  useVoiceInput(bus) // "open" confirms the gazed node; listens only while eye control is on
 
   // prefers-reduced-motion: shorten the coast substantially, keep direct
   // manipulation - inertia IS the product (S11). CSS drops panel transitions.
@@ -181,8 +184,8 @@ export default function App() {
           {/* ORB_SELECT_SPEC §0 scope guard: the sight is neural-scene only;
               ?scene=globe keeps rotation-as-selection untouched. */}
           {neural && <Crosshair />}
-          {neural && <EyeDebug />}
-          {neural && <EyeCalibration />}
+          {neural && FLAGS.eye && <EyeDebug />}
+          {neural && FLAGS.eye && <EyeCalibration />}
           {/* The orbit index is the globe's category ladder. The neural scene
               has no category grid to walk (user direction 2026-09-14: remove
               it); ?scene=globe keeps it. docs/DECISIONS.md. */}
@@ -194,7 +197,7 @@ export default function App() {
       <ReportPanel />
       <FocusAnnouncer />
       <FeelPanel hidden={hideTune} />
-      {neural && <EyeControls />}
+      {neural && FLAGS.eye && <EyeControls />}
     </div>
   )
 }

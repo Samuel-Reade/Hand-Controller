@@ -595,6 +595,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
     flowGain: slider(() => NCONF.trail.flowGain, (v) => { NCONF.trail.flowGain = v }, 0, 3, 0.05),
     flowWidth: slider(() => NCONF.trail.flowWidth, (v) => { NCONF.trail.flowWidth = v }, 0.01, 0.3, 0.005),
     flowPeriod: slider(() => NCONF.trail.flowPeriod, (v) => { NCONF.trail.flowPeriod = v }, 1, 20, 0.1),
+    flowSwell: slider(() => NCONF.trail.flowSwell, (v) => { NCONF.trail.flowSwell = v }, 0, 4, 0.05),
+    flowFloor: slider(() => NCONF.trail.flowFloor, (v) => { NCONF.trail.flowFloor = v }, 0, 1, 0.01),
     spokeMinWeight: rebuildSlider(() => NCONF.trail.spokeMinWeight, (v) => { NCONF.trail.spokeMinWeight = v }, 0, 1, 0.01),
     endInset: rebuildSlider(() => NCONF.trail.endInset, (v) => { NCONF.trail.endInset = v }, 0, 1.5, 0.05),
   })
@@ -859,6 +861,8 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
   const viewRef = useRef<ViewSpec | null>(null)
   /** ORB_EYE point mode: the node the eyes are on (neural/gazeFocus.ts) */
   const gazeFocus = useRef(createGazeFocus())
+  /** the eyes-closed confirm has fired for the current closure */
+  const closeFired = useRef(false)
 
   // Two-hand zoom view (ORB_ZOOM_SPEC): pure model, stepped in useFrame.
   const zoomView = useRef(createZoomView()).current
@@ -1469,11 +1473,19 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
           const visR = discRadiusPx(diam, focalH, p.w) * NCONF.render.discEdge
           const r = Math.max(EYE.pointMinRadiusPx, visR * EYE.pointRadiusMult)
           const dist = Math.hypot(p.x - gx, p.y - gy)
-          if (dist <= r * EYE.pointReleaseFactor) cands.push({ name: n.name, dist, r })
+          if (EYE.pointHop || dist <= r * EYE.pointReleaseFactor) cands.push({ name: n.name, dist, r })
         }
-        gazeFocus.current = stepGazeFocus(gazeFocus.current, cands, nowMs, {
-          holdMs: EYE.pointHoldMs, releaseFactor: EYE.pointReleaseFactor, switchMargin: EYE.pointSwitchMargin,
-        })
+        // Lids down (a blink, or an eyes-closed confirm in progress): hold the
+        // focus. The blink freeze holds the LAST raw frame, and with an
+        // unsettled (dashed-ring) gaze that frame is off the fixation mean -
+        // the point drifts to it and the ring hopped to a neighbour mid-
+        // closure, so the confirm landed on a node the user never meant.
+        const lidsDown = eyeRuntime.eyesShutMs > 0 || (!eyeRuntime.headOnly && !eyeRuntime.irisOkL && !eyeRuntime.irisOkR)
+        if (!lidsDown || !gazeFocus.current.name) {
+          gazeFocus.current = stepGazeFocus(gazeFocus.current, cands, nowMs, {
+            holdMs: EYE.pointHoldMs, releaseFactor: EYE.pointReleaseFactor, switchMargin: EYE.pointSwitchMargin, hop: EYE.pointHop,
+          })
+        }
         gazeRuntime.live = true
         gazeRuntime.x = gx
         gazeRuntime.y = gy
@@ -1499,10 +1511,21 @@ export function NeuralScene({ bus }: { bus: InputBus }) {
             gazeFocus.current = { ...g, dwelled: true }
             bus.emit({ type: 'tap' }) // an unpositioned confirm: routed to the gazed node above
           }
+          // Eyes-closed confirm (closeConfirmMs > 0): once per closure. The
+          // blink freeze holds the point while the lids are down, so the
+          // ring is still on the node the user was looking at.
+          if (EYE.closeConfirmMs > 0 && !closeFired.current && eyeRuntime.eyesShutMs >= EYE.closeConfirmMs) {
+            closeFired.current = true
+            if (import.meta.env.DEV) console.info('[eye] eyes-closed confirm', g.name)
+            bus.emit({ type: 'tap' })
+          }
         } else {
           gazeRuntime.name = null
           gazeRuntime.heldMs = 0
         }
+        // re-arm once the eyes open (a closure that began with no node never fires late)
+        if (eyeRuntime.eyesShutMs === 0) closeFired.current = false
+        else if (!g.name) closeFired.current = true
       } else {
         if (gazeFocus.current.name !== null || gazeRuntime.live) gazeFocus.current = createGazeFocus()
         gazeRuntime.live = false

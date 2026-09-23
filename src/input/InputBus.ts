@@ -24,6 +24,10 @@ export type InputEvent =
   // Return to the anchor (Escape): undo any drill and any click-to-centre so
   // the brain holds the centre again. The physics ignores it.
   | { type: 'home' }
+  // One-look re-centre of the gaze pointer (C, the voice word "centre"):
+  // the eye shell samples the gaze at the screen centre and keeps the shift.
+  // Everything else ignores it.
+  | { type: 'recentre' }
   | { type: 'step'; axis: 'yaw' | 'pitch'; dir: -1 | 1 }
   | { type: 'lost'; source?: InputSource }            // tracking dropped: freeze, decay
   // Two-handed pinch-zoom (ORB_ZOOM_SPEC). Emitted by the hand arbiter that

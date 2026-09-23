@@ -1,7 +1,8 @@
 // Keyboard -> InputBus. Full keyboard operation is a requirement (S7): it is
 // how the app works with the camera off. Arrows step between items/orbits,
 // Enter taps, Escape closes the report panel - or, with none open, returns
-// the view to the centre node (home).
+// the view to the centre node (home). C re-centres the gaze pointer (eye
+// control only; the eye shell ignores it otherwise).
 
 import { useEffect } from 'react'
 import type { InputBus } from './InputBus'
@@ -48,6 +49,12 @@ export function useKeyboardInput(bus: InputBus): void {
         case 'Enter':
           e.preventDefault()
           bus.emit({ type: 'tap' })
+          break
+        case 'c':
+        case 'C':
+          if (!useStore.getState().eyeEnabled || e.metaKey || e.ctrlKey || e.altKey) break
+          e.preventDefault()
+          bus.emit({ type: 'recentre' })
           break
       }
     }

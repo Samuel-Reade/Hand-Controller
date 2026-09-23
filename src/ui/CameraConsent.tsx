@@ -7,6 +7,8 @@
 // (?input=synthetic) draws into the same HUD so screenshots show it too.
 
 import { useEffect, useState } from 'react'
+import { FLAGS } from '../config/flags'
+import { eyeRecentre } from '../input/useEyeInput'
 import { HAND_MIN_VIEWPORT, handControl, handRuntime } from '../input/useHandInput'
 import { useStore } from '../store'
 
@@ -35,6 +37,8 @@ export function CameraConsent() {
   const calibrating = useStore((s) => s.eyeCalibrating)
   const setCalibrating = useStore((s) => s.setEyeCalibrating)
   const calResult = useStore((s) => s.eyeCalResult)
+  const recentring = useStore((s) => s.eyeRecentring)
+  const recentreResult = useStore((s) => s.eyeRecentreResult)
   const [recording, setRecording] = useState<string | null>(null)
   // Dev recorder (EYE_ACCURACY_PLAN phase 1): four ten-second clips; the
   // JSON downloads and goes into recordings/. Dev only.
@@ -94,14 +98,16 @@ export function CameraConsent() {
           </span>
           {/* ORB_EYE_SPEC §7: the gaze channel's opt-in. Violet because it is
               pressable; disabled until the camera is on, and never a prompt. */}
-          <button
-            type="button"
-            className="hand-link hand-link-eye"
-            aria-pressed={eyeEnabled}
-            onClick={() => setEyeEnabled(!eyeEnabled)}
-          >
-            {eyeEnabled ? 'EYE ON' : 'EYE'}
-          </button>
+          {FLAGS.eye && (
+            <button
+              type="button"
+              className="hand-link hand-link-eye"
+              aria-pressed={eyeEnabled}
+              onClick={() => setEyeEnabled(!eyeEnabled)}
+            >
+              {eyeEnabled ? 'EYE ON' : 'EYE'}
+            </button>
+          )}
           {eyeEnabled && (
             <button
               type="button"
@@ -111,6 +117,17 @@ export function CameraConsent() {
               title="Five targets, about eight seconds. Session only."
             >
               {calibrating ? 'CALIBRATING…' : (calResult ?? 'CALIBRATE')}
+            </button>
+          )}
+          {eyeEnabled && (
+            <button
+              type="button"
+              className="hand-link hand-link-eye"
+              disabled={calibrating || recentring}
+              onClick={() => void eyeRecentre()}
+              title="Look at the ring in the middle for a second: the pointer shifts back onto it. Also: press C, or say “centre”."
+            >
+              {recentring ? 'LOOK AT THE RING…' : (recentreResult ?? 'RE-CENTRE')}
             </button>
           )}
           {eyeEnabled && import.meta.env.DEV && (

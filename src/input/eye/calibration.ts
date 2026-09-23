@@ -129,10 +129,39 @@ export interface FitReport {
 
 type Lin = { model: Calibration['model']; x: number[]; y: number[] }
 
-function fitLinear(samples: readonly CalibrationSample[], ridge: number, model: Calibration['model'] = 'base'): Lin | null {
+/**
+ * The head gain a calibration may NOT fit: px per degree of head yaw (x)
+ * and pitch (y, sign flipped like the default map). A head-still
+ * calibration barely moves the head (the 2026-09-22 run spanned 0.5° of
+ * yaw), so a fitted head gain is noise - 57 px/° on one run, the wrong sign
+ * on another - and a 1.6° drift in posture then moved the point 90-200 px.
+ * Fixed at the viewing geometry instead: a head turn moves the gaze as far
+ * as the same eye turn would. null = fit it (the head-turn stage exists to
+ * pin it down).
+ */
+export function fixedHeadGain(cfg: Pick<EyeConfig, 'calHeadTurn' | 'calHeadGainPxPerDeg'>): number | null {
+  if (cfg.calHeadTurn || !(cfg.calHeadGainPxPerDeg >= 0)) return null
+  return cfg.calHeadGainPxPerDeg
+}
+
+function fitLinear(
+  samples: readonly CalibrationSample[],
+  ridge: number,
+  model: Calibration['model'] = 'base',
+  headGain: number | null = null,
+): Lin | null {
   const wt = samples.map((s) => s.weight ?? 1)
-  const x = fitAxisRows(samples.map((s) => featureRow(s.features, model, 'x')), samples.map((s) => s.target.x), wt, ridge)
-  const y = fitAxisRows(samples.map((s) => featureRow(s.features, model, 'y')), samples.map((s) => s.target.y), wt, ridge)
+  const axis = (a: 'x' | 'y'): number[] | null => {
+    const rows = samples.map((s) => featureRow(s.features, model, a))
+    const t = samples.map((s) => s.target[a])
+    if (headGain === null) return fitAxisRows(rows, t, wt, ridge)
+    // column 1 is the head term in every model: move it to the target side
+    const k = a === 'x' ? headGain : -headGain
+    const w = fitAxisRows(rows.map((r) => [r[0], ...r.slice(2)]), t.map((v, i) => v - k * rows[i][1]), wt, ridge)
+    return w ? [w[0], k, ...w.slice(1)] : null
+  }
+  const x = axis('x')
+  const y = axis('y')
   return x && y ? { model, x, y } : null
 }
 
@@ -229,7 +258,8 @@ export function fitCalibrationReport(
     curved: false, looLinearPx: NaN, looCurvedPx: NaN, wide: false, looWidePx: NaN,
   }
   if (samples.length < 4) return { ...base, reason: 'too-few-samples' }
-  let lin = fitLinear(samples, ridge, 'base')
+  const headGain = fixedHeadGain(cfg)
+  let lin = fitLinear(samples, ridge, 'base', headGain)
   if (!lin) return { ...base, reason: 'singular' }
   let map = (f: GazeFeatures) => linPredict(lin!, f)
   let quad: Calibration['quad'] | undefined
@@ -240,18 +270,18 @@ export function fitCalibrationReport(
   let looWidePx = NaN
   if (viewport && samples.length >= 8) {
     looLinearPx = loo(samples, (train) => {
-      const l = fitLinear(train, ridge, 'base')
+      const l = fitLinear(train, ridge, 'base', headGain)
       return l ? (f) => linPredict(l, f) : null
     })
     // The wide model (per-eye iris + per-eye blendshapes, 6 terms per
     // axis): with enough samples, and only if it wins leave-one-out by 5 %.
     if (cfg.wideModel && samples.length >= 14) {
       looWidePx = loo(samples, (train) => {
-        const l = fitLinear(train, ridge, 'wide')
+        const l = fitLinear(train, ridge, 'wide', headGain)
         return l ? (f) => linPredict(l, f) : null
       })
       if (Number.isFinite(looWidePx) && looWidePx < 0.95 * looLinearPx) {
-        const w = fitLinear(samples, ridge, 'wide')
+        const w = fitLinear(samples, ridge, 'wide', headGain)
         if (w) {
           lin = w
           map = (f) => linPredict(lin!, f)
@@ -262,7 +292,7 @@ export function fitCalibrationReport(
     const looChosen = wide ? looWidePx : looLinearPx
     const model = lin.model
     looCurvedPx = loo(samples, (train) => {
-      const l = fitLinear(train, ridge, model)
+      const l = fitLinear(train, ridge, model, headGain)
       const q = l && fitQuad(train, l, viewport, 0.05)
       return l && q ? (f) => quadPredict(l, q, viewport, f) : null
     })

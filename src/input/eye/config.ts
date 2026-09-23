@@ -41,10 +41,20 @@ export interface EyeConfig {
   pointSwitchMargin: number  // ...and beat the current focus's score by this factor (< 1) to start that clock
   pointReleaseFactor: number // focus drops once its score exceeds this (x capture radius) for pointHoldMs
   pointDwellMs: number       // 0 = off; else a node focused this long confirms itself (hands-free)
+  closeConfirmMs: number     // 0 = off; else both eyes shut this long confirms the ringed node (hands-free, clickless)
+  closeGraceMs: number       // a flicker open shorter than this does not restart the eyes-closed clock
+  // one-look re-centre ("centre" / C / the HUD button): look at the screen centre; the shift that puts the gaze there is kept
+  recentreSettleMs: number   // after the trigger, time for the eyes to land on the centre ring before sampling
+  recentreWindowMs: number   // then sample the gaze point this long
+  recentreMinSamples: number // fewer good frames than this: no change
+  recentreMaxPx: number      // a total offset beyond this is refused: the map is wrong, recalibrate
+  voiceConfirm: boolean      // voice commands: "open" confirms the ringed node, "leave" backs out like Escape, "centre" re-centres (Web Speech API; eye control on only)
   // fixation: a stare is the MEAN of the recent gaze points, not one frame
   fixationMs: number         // window of recent points averaged while they cluster
   fixationMaxMs: number      // the window grows to this while the fixation holds
   fixationRadiusPx: number   // points farther than this from the latest are a saccade, not the fixation
+  pointBiasYPx: number       // added to the gaze point's y after the map (negative = up): the standing "reads below" correction
+  pointHop: boolean          // the focus always sits on a node and only hops to another; empty space keeps the current one
   blinkFreeze: boolean       // hold the features while both eyes are shut (a blink cannot yank the point)
   // learning from confirms: every Enter on a gazed node is a verified sample
   learnFromConfirms: boolean
@@ -92,6 +102,7 @@ export interface EyeConfig {
   calNinePoints: boolean     // 9 targets instead of 5: slower, steadier on a noisy camera
   calHeadTurn: boolean       // a final stage: eyes on the centre ring while the head turns - separates head gain from eye gain (off: the product is eyes only, head still)
   calHeadTurnMs: number
+  calHeadGainPxPerDeg: number // without the head-turn stage the fit does not learn the head gain; it is fixed here (px per degree of head turn; < 0 = fit it anyway)
   // saccade drill (dev): a ring steps centre, left, right, centre, up, down - each shown this long - while
   // the recorder runs with the ring as ground truth, so the replay can say whether a saccade falls short
   // (response < 1) or overshoots (> 1) on THIS user's map
@@ -140,9 +151,30 @@ export const EYE_DEFAULTS: EyeConfig = {
   pointSwitchMargin: 0.8,
   pointReleaseFactor: 1.6,
   pointDwellMs: 0,
+  // Sam, 2026-09-22: clickless selection - "if a user says open, or closes
+  // their eyes for 1 second or more, the node is clicked". Both fire the
+  // same unpositioned confirm as Enter, so select-then-enter still applies.
+  closeConfirmMs: 1000,
+  closeGraceMs: 200, // ~3 frames at Sam's 15 Hz
+  // Sam, 2026-09-22 ("it drifts a lot"): drill 3's error was one shared
+  // shift (x -196 px on all six rings) from ~1.6 deg of head turn since the
+  // calibration. A one-look re-centre removes that shift without a recalibration.
+  recentreSettleMs: 400,
+  recentreWindowMs: 800,
+  recentreMinSamples: 5, // 800 ms at 15 Hz is ~12 frames
+  recentreMaxPx: 450,
+  voiceConfirm: true,
   fixationMs: 250,
   fixationMaxMs: 800, // at 10 Hz (a real machine) 800 ms is only 8 frames; the dispersion rule still resets on a saccade
   fixationRadiusPx: 90, // above the 1-2° (40-80 px) per-frame jitter, so a stare does not fragment
+  // Sam, 2026-09-22: "still below where I am looking a lot of the time" -
+  // drill 3 read ~95 px low on every ring (drill 2 read high: it varies by
+  // sitting). A standing nudge up, a slider to tune it live.
+  pointBiasYPx: -40, // tried -25 live (2026-09-22): worse; back to -40
+  // Sam, 2026-09-22: "have it only hop node to node". The ring never drops
+  // to nothing while the gaze is live; a rival must win its own cone by
+  // pointSwitchMargin for pointHoldMs to take it.
+  pointHop: true,
   blinkFreeze: true,
   learnFromConfirms: true,
   // On (2026-09-14): Enter can only confirm the RINGED node, so a gaze
@@ -203,6 +235,11 @@ export const EYE_DEFAULTS: EyeConfig = {
   // nothing. The slider stays for a head-moving demo.
   calHeadTurn: false,
   calHeadTurnMs: 6000,
+  // Fixed, not fitted (2026-09-22 drill 3): a head-still calibration spans
+  // ~0.5° of head yaw, so a fitted gain is noise. 38 = pxPerDeg, the viewing
+  // geometry. That drill did better still at 0 (158 vs 211 px); one clip -
+  // try it on the slider before changing the default.
+  calHeadGainPxPerDeg: 38,
   drillStepMs: 2000,
   calPointHoldMs: 1600,
   calSampleWindowMs: 1000,

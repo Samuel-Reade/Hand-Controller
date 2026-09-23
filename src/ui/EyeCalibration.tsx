@@ -34,6 +34,7 @@ export function EyeCalibration() {
   const setCalibrating = useStore((s) => s.setEyeCalibrating)
   const setResult = useStore((s) => s.setEyeCalResult)
   const drill = useStore((s) => s.eyeDrill)
+  const recentring = useStore((s) => s.eyeRecentring)
   const [index, setIndex] = useState(0)
   const [sampling, setSampling] = useState(false)
   const [headTurn, setHeadTurn] = useState(false)
@@ -161,6 +162,16 @@ export function EyeCalibration() {
 
   // The saccade drill (dev recorder): the same ring, stepped by the shell's
   // __eyeDrill; the gaze pointer keeps running - the clip is what matters.
+  // The one-look re-centre (useEyeInput.eyeRecentre): the same ring, at the
+  // screen centre - where the sight is - while the gaze is sampled.
+  if (!calibrating && recentring) {
+    return (
+      <div className="eye-cal" aria-hidden="true">
+        <div className="eye-cal-target" data-sampling="1" style={{ transform: `translate(${window.innerWidth / 2}px, ${window.innerHeight / 2}px)` }} />
+        <div className="eye-cal-note">Look at the ring · re-centring</div>
+      </div>
+    )
+  }
   if (!calibrating && drill) {
     return (
       <div className="eye-cal" aria-hidden="true">

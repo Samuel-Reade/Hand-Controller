@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest'
 import { OneEuroFilter } from '../src/input/OneEuroFilter'
 import { syntheticFace } from '../src/input/eye/__synthetic__/face'
-import { createEyeChannel } from '../src/input/eye/channel'
+import { createEyeChannel, recentreOffset } from '../src/input/eye/channel'
 import type { EyeContext } from '../src/input/eye/channel'
 import { EYE_DEFAULTS } from '../src/input/eye/config'
 import type { EyeConfig } from '../src/input/eye/config'
@@ -21,12 +21,14 @@ import {
 } from '../src/input/eye/face'
 import type { FaceFrame, GazeFeatures } from '../src/input/eye/face'
 import {
-  calibrationTargets, createOnlineCalibration, fitCalibration, fitCalibrationReport, learnAllowed, learnConfirm, mapWith, medianFeatures,
+  calibrationTargets, createOnlineCalibration, fitCalibration, fitCalibrationReport, fixedHeadGain, learnAllowed, learnConfirm, mapWith,
+  medianFeatures,
 } from '../src/input/eye/calibration'
 import type { CalibrationSample } from '../src/input/eye/calibration'
 import { createFixation, createGazeFocus, stepFixation, stepGazeFocus } from '../src/neural/gazeFocus'
 import type { GazeCandidate } from '../src/neural/gazeFocus'
 import type { InputEvent } from '../src/input/InputBus'
+import { heardCentre, heardLeave, heardOpen } from '../src/input/useVoiceInput'
 
 /** The steer-mode config (route A) the spec's tests 1-9 are written against. */
 const cfg = (over: Partial<EyeConfig> = {}): EyeConfig => ({
@@ -370,7 +372,8 @@ describe('point mode: features and the calibrated map', () => {
   })
 
   it('a fit with a residual over calMaxResidualPx is rejected; too few samples too', () => {
-    const c = { ...EYE_DEFAULTS, enabled: true, calMaxResidualPx: 30 }
+    // head gain fitted: the synthetic user below looks with the head as well
+    const c = { ...EYE_DEFAULTS, enabled: true, calMaxResidualPx: 30, calHeadGainPxPerDeg: -1 }
     const targets = calibrationTargets(VIEW, 0.4)
     // a user who never looked at the targets: the features barely move
     const garbage: CalibrationSample[] = targets.map((t, i) => ({
@@ -472,6 +475,59 @@ describe('point mode: gaze focus hysteresis', () => {
   })
 })
 
+describe('point mode: hop node to node', () => {
+  const fc = { holdMs: 120, releaseFactor: 1.6, switchMargin: 0.8, hop: true }
+  const A = (dist: number): GazeCandidate => ({ name: 'A', dist, r: 80 })
+  const B = (dist: number): GazeCandidate => ({ name: 'B', dist, r: 80 })
+  const hold = (s: ReturnType<typeof createGazeFocus>, cands: GazeCandidate[], from: number, to: number) => {
+    for (let t = from; t <= to; t += FRAME) s = stepGazeFocus(s, cands, t, fc)
+    return s
+  }
+
+  it('takes the nearest node even when the gaze is outside every cone', () => {
+    const s = hold(createGazeFocus(), [A(300), B(500)], 0, 200)
+    expect(s.name).toBe('A')
+  })
+
+  it('keeps the node while the gaze wanders into empty space', () => {
+    let s = hold(createGazeFocus(), [A(10), B(200)], 0, 200)
+    expect(s.name).toBe('A')
+    s = hold(s, [A(400), B(400)], 200, 2000)
+    expect(s.name).toBe('A')
+  })
+
+  it('hops only when a rival wins its own cone for holdMs', () => {
+    let s = hold(createGazeFocus(), [A(10), B(200)], 0, 200)
+    s = hold(s, [A(150), B(20)], 200, 260) // not held long enough yet
+    expect(s.name).toBe('A')
+    s = hold(s, [A(150), B(20)], 260, 400)
+    expect(s.name).toBe('B')
+  })
+
+  it('lets go only when the node leaves the candidates (off screen)', () => {
+    let s = hold(createGazeFocus(), [A(10), B(200)], 0, 200)
+    s = hold(s, [B(600)], 200, 600)
+    expect(s.name).toBe('B') // dropped A, then took the nearest again
+  })
+})
+
+describe('point mode: the standing vertical nudge', () => {
+  it('moves the published point by pointBiasYPx and nothing else', () => {
+    const base: EyeConfig = { ...EYE_DEFAULTS, enabled: true, mode: 'point', pointBiasYPx: 0 }
+    const plain = createEyeChannel(base)
+    const up = createEyeChannel({ ...base, pointBiasYPx: -40 })
+    for (let i = 0; i < 40; i++) {
+      const t = i * FRAME
+      const face = syntheticFace({ yaw: 5, irisX: 0.3, irisY: -0.2 }, t)
+      plain.process(face, t, ctx())
+      up.process(face, t, ctx())
+    }
+    expect(up.telemetry.gazeY - plain.telemetry.gazeY).toBeCloseTo(-40, 6)
+    expect(up.telemetry.gazeX - plain.telemetry.gazeX).toBeCloseTo(0, 6)
+    expect(up.telemetry.rawY - plain.telemetry.rawY).toBeCloseTo(-40, 6)
+  })
+})
+
 describe('point mode: the channel moves nothing and publishes the point', () => {
   it('emits no events, is idle with a face and suspended by the mouse, and publishes gazeX/Y', () => {
     const c: EyeConfig = { ...EYE_DEFAULTS, enabled: true, mode: 'point' }
@@ -482,6 +538,53 @@ describe('point mode: the channel moves nothing and publishes the point', () => 
     expect(ch.telemetry.gazeX).toBeGreaterThan(VIEW.w / 2 + 100) // right of centre: head 8° + iris
     const { states: m } = run(c, () => syntheticFace({ yaw: 8 }), 20, () => ctx({ pointerIdleMs: 50 }))
     expect(m.every((s) => s.s === 'suspended')).toBe(true)
+  })
+})
+
+describe('calibration: the head gain is fixed without the head-turn stage', () => {
+  // A head-still run: the eyes do the looking; the head wobbles ~0.5° and,
+  // by chance, the wobble lines up with the rings - a free fit reads that
+  // as a big head gain, which a later posture drift then multiplies.
+  const targets = calibrationTargets(VIEW, 0.65, true)
+  const samples: CalibrationSample[] = targets.map((t, i) => ({
+    features: feat({
+      headYaw: -3 + (t.x - VIEW.w / 2) / 1800 + ((i % 3) - 1) * 0.05,
+      headPitch: 5 + (t.y - VIEW.h / 2) / -1800,
+      // measurement noise on the eyes (~±60 px), as the real runs have
+      irisX: (t.x - VIEW.w / 2) / 1500 + (((i * 7) % 3) - 1) * 0.04,
+      irisY: (t.y - VIEW.h / 2) / -1500 + (((i * 5) % 3) - 1) * 0.04,
+      blendX: (t.x - VIEW.w / 2) / 1500 + (((i * 4) % 3) - 1) * 0.04,
+      blendY: (t.y - VIEW.h / 2) / -1500 + (((i * 2) % 3) - 1) * 0.04,
+    }),
+    target: t,
+  }))
+  const viewport = VIEW
+  const fit = (c: EyeConfig) => fitCalibrationReport(samples, c, (f) => screenPointFrom(f, c, viewport, null), 1e-3, viewport)
+
+  it('uses calHeadGainPxPerDeg for the head term, signed like the default map', () => {
+    const c = { ...EYE_DEFAULTS, enabled: true, calHeadTurn: false, calHeadGainPxPerDeg: 38 }
+    const r = fit(c)
+    expect(r.accepted).toBe(true)
+    expect(r.cal!.x[1]).toBe(38)
+    expect(r.cal!.y[1]).toBe(-38)
+  })
+
+  it('keeps a posture drift small where the free fit blows it up', () => {
+    const fixedC = { ...EYE_DEFAULTS, enabled: true, calHeadTurn: false, calHeadGainPxPerDeg: 38 }
+    const freeC = { ...fixedC, calHeadGainPxPerDeg: -1 }
+    const fixed = fit(fixedC).cal!
+    const free = fit(freeC).cal!
+    const centre = samples[0].features
+    const drifted = { ...centre, headYaw: centre.headYaw - 1.6 }
+    const move = (cal: typeof fixed) => Math.abs(mapWith(cal, drifted).x - mapWith(cal, centre).x)
+    expect(move(fixed)).toBeCloseTo(38 * 1.6, 3)
+    expect(move(free)).toBeGreaterThan(1.5 * move(fixed)) // 104 vs 61 px here
+  })
+
+  it('fits it when the head-turn stage runs, or when the gain is negative', () => {
+    expect(fixedHeadGain({ calHeadTurn: true, calHeadGainPxPerDeg: 38 })).toBeNull()
+    expect(fixedHeadGain({ calHeadTurn: false, calHeadGainPxPerDeg: -1 })).toBeNull()
+    expect(fixedHeadGain({ calHeadTurn: false, calHeadGainPxPerDeg: 0 })).toBe(0)
   })
 })
 
@@ -751,5 +854,121 @@ describe('accuracy: the fixation window grows while the stare holds', () => {
     const j = stepFixation(s, 900, 300, 41 * FRAME, fc)
     expect(j.n).toBe(1)
     expect(j.windowMs).toBe(250)
+  })
+})
+
+describe('clickless confirm: eyes closed', () => {
+  const c: EyeConfig = { ...EYE_DEFAULTS, enabled: true, mode: 'point' }
+  it('counts a deliberate closure; a blink never reaches the confirm', () => {
+    // eyes shut from 1000 ms to 2100 ms (open again past closeGraceMs by 2500), with a 150 ms blink earlier
+    const script = (t: number) =>
+      (t >= 400 && t < 550) || (t >= 1000 && t < 2100)
+        ? syntheticFace({ yaw: 6, blinkL: 0.9, blinkR: 0.9 })
+        : syntheticFace({ yaw: 6 })
+    const ch = createEyeChannel(c)
+    let blinkMax = 0
+    let shutMax = 0
+    for (let t = 0; t < 2500; t += FRAME) {
+      ch.process(script(t), t, ctx())
+      if (t < 900) blinkMax = Math.max(blinkMax, ch.telemetry.eyesShutMs)
+      else if (t < 2100) shutMax = Math.max(shutMax, ch.telemetry.eyesShutMs)
+    }
+    expect(blinkMax).toBeLessThan(c.closeConfirmMs)
+    expect(shutMax).toBeGreaterThanOrEqual(c.closeConfirmMs)
+    expect(ch.telemetry.eyesShutMs).toBe(0) // open again
+  })
+  it("Sam's closure: right eye only 0.46, one frame flickering open - still reaches the confirm", () => {
+    // rest.json: open 0.22/0.20; a full blink peaked 0.74/0.54 then 0.68/0.48.
+    // A fixed 0.5 floor never held for a second on that right eye.
+    const ch = createEyeChannel(c)
+    let t = 0
+    for (; t < 2000; t += FRAME) ch.process(syntheticFace({ yaw: 6, blinkL: 0.22, blinkR: 0.2 }), t, ctx())
+    let shutMax = 0
+    for (let k = 0; t < 3500; t += FRAME, k++) {
+      const flicker = k === 15 // one frame open, mid-closure
+      ch.process(syntheticFace({ yaw: 6, blinkL: flicker ? 0.22 : 0.7, blinkR: flicker ? 0.2 : 0.46 }), t, ctx())
+      shutMax = Math.max(shutMax, ch.telemetry.eyesShutMs)
+    }
+    expect(shutMax).toBeGreaterThanOrEqual(c.closeConfirmMs)
+  })
+  it('looking down (lids at 0.34, Sam\'s vertical clip max) is not a closure', () => {
+    const ch = createEyeChannel(c)
+    let t = 0
+    for (; t < 2000; t += FRAME) ch.process(syntheticFace({ yaw: 6, blinkL: 0.22, blinkR: 0.2 }), t, ctx())
+    for (; t < 4000; t += FRAME) ch.process(syntheticFace({ yaw: 6, irisY: 0.4, blinkL: 0.34, blinkR: 0.34 }), t, ctx())
+    expect(ch.telemetry.eyesShutMs).toBe(0)
+  })
+  it('one eye shut (a wink) or a lost face does not count', () => {
+    const ch = createEyeChannel(c)
+    for (let t = 0; t < 1500; t += FRAME) ch.process(syntheticFace({ yaw: 6, blinkL: 0.9 }), t, ctx())
+    expect(ch.telemetry.eyesShutMs).toBe(0)
+    for (let t = 1500; t < 2500; t += FRAME) ch.process(syntheticFace({ yaw: 6, blinkL: 0.9, blinkR: 0.9 }), t, ctx())
+    expect(ch.telemetry.eyesShutMs).toBeGreaterThan(900)
+    ch.process(null, 2500, ctx())
+    expect(ch.telemetry.eyesShutMs).toBe(0)
+  })
+})
+
+describe('clickless confirm: voice', () => {
+  it('"open" as a whole word, anywhere in the phrase', () => {
+    expect(heardOpen('open')).toBe(true)
+    expect(heardOpen(' Open it')).toBe(true)
+    expect(heardOpen('okay open')).toBe(true)
+    expect(heardOpen('opened')).toBe(false)
+    expect(heardOpen('reopen')).toBe(false)
+    expect(heardOpen('close')).toBe(false)
+  })
+  it('"leave" (and its common mishearing "leaf") as a whole word', () => {
+    expect(heardLeave('leave')).toBe(true)
+    expect(heardLeave('Leave it')).toBe(true)
+    expect(heardLeave('leaf')).toBe(true)
+    expect(heardLeave('leaves')).toBe(false)
+    expect(heardLeave('open')).toBe(false)
+  })
+})
+
+describe('re-centre', () => {
+  const rc = { recentreMinSamples: 5, recentreMaxPx: 450 }
+  const centre = { x: 720, y: 450 }
+  it('the median of the samples moves onto the centre; a glance away does not drag it', () => {
+    // drill 3's shape: everything ~196 px left and ~50 px low of the ring
+    const pts = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ x: 524 + (i % 3) * 4, y: 500 + (i % 2) * 6 }))
+    pts.push({ x: 1300, y: 100 }) // a glance at the corner mid-window
+    const r = recentreOffset(pts, centre, { x: 0, y: 0 }, rc)
+    if (!('offset' in r)) throw new Error('refused')
+    expect(Math.abs(r.offset.x - 192)).toBeLessThan(6)
+    expect(Math.abs(r.offset.y - -50)).toBeLessThan(6)
+  })
+  it('adds to the offset in force (the samples already include it)', () => {
+    const pts = Array.from({ length: 8 }, () => ({ x: 700, y: 450 }))
+    const r = recentreOffset(pts, centre, { x: 150, y: -30 }, rc)
+    if (!('offset' in r)) throw new Error('refused')
+    expect(r.offset).toEqual({ x: 170, y: -30 })
+    expect(r.shift).toEqual({ x: 20, y: 0 })
+  })
+  it('refuses too few samples, and a total shift past recentreMaxPx', () => {
+    expect(recentreOffset([{ x: 1, y: 1 }], centre, { x: 0, y: 0 }, rc)).toEqual({ error: 'few' })
+    const far = Array.from({ length: 8 }, () => ({ x: 100, y: 450 }))
+    expect('error' in recentreOffset(far, centre, { x: 0, y: 0 }, rc)).toBe(true)
+  })
+  it('the channel adds the offset to the gaze point, after the map', () => {
+    const c: EyeConfig = { ...EYE_DEFAULTS, enabled: true, mode: 'point' }
+    const a = createEyeChannel(c)
+    const b = createEyeChannel(c)
+    b.offset = { x: 120, y: -40 }
+    for (let t = 0; t < 1500; t += FRAME) {
+      a.process(syntheticFace({ yaw: 4, irisX: 0.2 }), t, ctx())
+      b.process(syntheticFace({ yaw: 4, irisX: 0.2 }), t, ctx())
+    }
+    expect(b.telemetry.gazeX - a.telemetry.gazeX).toBeCloseTo(120, 0)
+    expect(b.telemetry.gazeY - a.telemetry.gazeY).toBeCloseTo(-40, 0)
+  })
+  it('"centre" / "center" / "recenter" as a whole word', () => {
+    expect(heardCentre('centre')).toBe(true)
+    expect(heardCentre('Center')).toBe(true)
+    expect(heardCentre('recenter please')).toBe(true)
+    expect(heardCentre('re-centre')).toBe(true)
+    expect(heardCentre('central')).toBe(false)
+    expect(heardCentre('open')).toBe(false)
   })
 })

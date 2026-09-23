@@ -99,6 +99,8 @@ export interface EyeTelemetry {
   /** the live per-eye blink thresholds (open-eye baseline + margin) */
   blinkThresholdL: number
   blinkThresholdR: number
+  /** ms both eyes have been deliberately shut (0 = open) - the eyes-closed confirm reads it */
+  eyesShutMs: number
   /** the median pre-filter is active (frames arrive fast enough) */
   medianActive: boolean
   /** which delegate the face model got, and the hand model's cost - set by the shells */
@@ -135,7 +137,7 @@ export function createEyeTelemetry(): EyeTelemetry {
     rawX: 0, rawY: 0, headX: 0, headY: 0,
     okRateL: 0, okRateR: 0, vergenceDrop: null, frozen: false, detectHz: 0, wideModel: false,
     fixationN: 0, fixationWindowMs: 0,
-    blinkThresholdL: 0.3, blinkThresholdR: 0.3, medianActive: true,
+    blinkThresholdL: 0.3, blinkThresholdR: 0.3, eyesShutMs: 0, medianActive: true,
     delegate: '-', handDetectMs: 0, handDelegate: '-',
   }
 }
@@ -176,6 +178,12 @@ export interface EyeChannel {
   enabled: boolean
   /** the per-user map, or null for the default (calibration.ts) */
   calibration: Calibration | null
+  /**
+   * The re-centre shift, screen px, added after the map and the standing
+   * nudge (point mode). Measured by a one-look re-centre (recentreOffset);
+   * reset by an explicit calibration. The map never sees it.
+   */
+  offset: { x: number; y: number }
   /** One detector frame (null = no face this frame). Returns the bus events to emit. */
   process(frame: FaceFrame | null, nowMs: number, ctx: EyeContext): InputEvent[]
   /** Every bus event the channel did not emit itself - the arbitration input. */
@@ -224,6 +232,9 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
   /** frames left to reject after a blink ends (the iris snaps on reopen) */
   let postBlink = 0
   let wasBlinking = false
+  /** when both eyes went deliberately shut; null = open (the eyes-closed confirm) */
+  let shutSince: number | null = null
+  let lastShutT = 0
   /** fixation averaging ahead of the freeze */
   let fixation = createFixation()
   /** speed-gated freeze state */
@@ -240,6 +251,10 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
   let diffEma: { x: number; y: number } | null = null
   let prevEyes: { L: { x: number; y: number }; R: { x: number; y: number } } | null = null
   let lastFrameT: number | null = null
+
+  /** the standing vertical nudge (pointBiasYPx) and the re-centre offset, after the map - calibrated or not; point mode only */
+  const biased = (p: { x: number; y: number }) =>
+    cfg.mode === 'point' ? { x: p.x + channel.offset.x, y: p.y + cfg.pointBiasYPx + channel.offset.y } : p
 
   const setState = (s: EyeState) => {
     state = s
@@ -272,6 +287,8 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
     lastRaw = null
     postBlink = 0
     wasBlinking = false
+    shutSince = null
+    telemetry.eyesShutMs = 0
     frozen = false
     slowSince = null
     lastPt = null
@@ -290,6 +307,7 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
     telemetry,
     enabled: cfg.enabled,
     calibration: null,
+    offset: { x: 0, y: 0 },
     record: null,
 
     onBus(e, nowMs) {
@@ -358,8 +376,14 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
         const bL = frame.blendshapes.eyeBlinkLeft ?? 0
         const bR = frame.blendshapes.eyeBlinkRight ?? 0
         const a = Math.min(1, frameDt / 3000)
-        if (bL < cfg.blinkThreshold) baseL = baseL === null ? bL : baseL + a * (bL - baseL)
-        if (bR < cfg.blinkThreshold) baseR = baseR === null ? bR : baseR + a * (bR - baseR)
+        // Only a plainly OPEN frame feeds the baseline - under blinkThreshold
+        // AND under the live threshold. Sam's closed right eye reads 0.46,
+        // under 0.5: with the first rule alone a held closure taught the
+        // baseline that shut was open and the eyes-closed clock died at 0.9 s.
+        const openL = bL < cfg.blinkThreshold && (baseL === null || bL < Math.max(cfg.blinkIrisThreshold, baseL + cfg.blinkMargin))
+        const openR = bR < cfg.blinkThreshold && (baseR === null || bR < Math.max(cfg.blinkIrisThreshold, baseR + cfg.blinkMargin))
+        if (openL) baseL = baseL === null ? bL : baseL + a * (bL - baseL)
+        if (openR) baseR = baseR === null ? bR : baseR + a * (bR - baseR)
         const thresholds = {
           L: Math.max(cfg.blinkIrisThreshold, (baseL ?? 0) + cfg.blinkMargin),
           R: Math.max(cfg.blinkIrisThreshold, (baseR ?? 0) + cfg.blinkMargin),
@@ -406,6 +430,20 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
         // iris is rejected early on the way down (blinkIrisThreshold) and
         // for postBlinkFrames after the eyes reopen (it snaps back).
         const blinking = !iris.okL && !iris.okR
+        // Eyes-closed confirm: the same per-eye "shut" the freeze uses (this
+        // user's open-eye baseline + blinkMargin, or the lids together)
+        // starts a clock; the scene confirms the ringed node once it passes
+        // closeConfirmMs. NOT a fixed 0.5: Sam's right eye peaks at 0.54 in
+        // a full blink and a held, relaxed closure reads lower, so a fixed
+        // floor never held for a second. A flicker open shorter than
+        // closeGraceMs does not restart the clock. A blink is ~150 ms.
+        if (blinking) {
+          if (shutSince === null) shutSince = nowMs
+          lastShutT = nowMs
+        } else if (shutSince !== null && nowMs - lastShutT > cfg.closeGraceMs) {
+          shutSince = null
+        }
+        telemetry.eyesShutMs = shutSince === null ? 0 : nowMs - shutSince
         if (wasBlinking && !blinking) postBlink = cfg.postBlinkFrames
         else if (!blinking && postBlink > 0) postBlink--
         wasBlinking = blinking
@@ -436,7 +474,7 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
           const isHead = k === 'headYaw' || k === 'headPitch'
           f[k] = filters.get(k)!.filter(v, tS, isHead ? headParams : irisParams)
         }
-        const ptFiltered = screenPointFrom(f, cfg, ctx.viewport, channel.calibration)
+        const ptFiltered = biased(screenPointFrom(f, cfg, ctx.viewport, channel.calibration))
         // Fixation mean (the stare, not the frame), then the freeze on top.
         const fx = stepFixation(fixation, ptFiltered.x, ptFiltered.y, nowMs, {
           fixationMs: cfg.fixationMs, fixationMaxMs: cfg.fixationMaxMs, fixationRadiusPx: cfg.fixationRadiusPx,
@@ -489,12 +527,12 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
         // after a glance would otherwise count as part of the excursion and
         // turn a 250 ms glance into a 500 ms one. The torque itself uses the
         // filtered point, so the drift is smooth.
-        const ptRaw = screenPointFrom(raw, cfg, ctx.viewport, channel.calibration)
+        const ptRaw = biased(screenPointFrom(raw, cfg, ctx.viewport, channel.calibration))
         normRaw = Math.hypot(ptRaw.x - cx, ptRaw.y - cy) / R
         // head-only point: the same map with every iris feature zeroed
         const headF = { ...f }
         for (const k of FEATURE_KEYS) if (k !== 'headYaw' && k !== 'headPitch') headF[k] = 0
-        const ptHead = screenPointFrom(headF, cfg, ctx.viewport, channel.calibration)
+        const ptHead = biased(screenPointFrom(headF, cfg, ctx.viewport, channel.calibration))
         telemetry.headOnly = headOnly
         telemetry.yaw = f.headYaw
         telemetry.pitch = f.headPitch
@@ -518,6 +556,10 @@ export function createEyeChannel(cfg: EyeConfig, telemetry: EyeTelemetry = creat
         telemetry.blinkR = frame.blendshapes.eyeBlinkRight ?? 0
         telemetry.headSource = head.source
         telemetry.filterCutoffHz = cfg.minCutoffHz
+      } else {
+        // no face: a closure the model lost track of is not a confirm
+        shutSince = null
+        telemetry.eyesShutMs = 0
       }
       telemetry.confidence = conf
       const present = frame !== null && conf >= cfg.confidenceMin
@@ -678,4 +720,30 @@ export function torque(
 ): InputEvent {
   const step = mag * cfg.maxDegPerSec * dt * DEG2RAD
   return { type: 'move', dYaw: -dir.x * step, dPitch: -dir.y * step, source: 'gaze' }
+}
+
+/**
+ * One-look re-centre: the user looked at `target` while `points` (the gaze
+ * point as it read, offset included) were sampled. The new offset moves
+ * their median onto the target. The median, not the mean: a blink or a
+ * glance away inside the window must not drag it. Null when there is too
+ * little to go on, or the shift is so large the map itself is wrong
+ * (recalibrate instead).
+ */
+export function recentreOffset(
+  points: { x: number; y: number }[],
+  target: { x: number; y: number },
+  current: { x: number; y: number },
+  cfg: Pick<EyeConfig, 'recentreMinSamples' | 'recentreMaxPx'>,
+): { offset: { x: number; y: number }; shift: { x: number; y: number } } | { error: 'few' | 'far'; shift?: { x: number; y: number } } {
+  if (points.length < cfg.recentreMinSamples) return { error: 'few' }
+  const median = (v: number[]) => {
+    const a = [...v].sort((p, q) => p - q)
+    const m = a.length >> 1
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2
+  }
+  const shift = { x: target.x - median(points.map((p) => p.x)), y: target.y - median(points.map((p) => p.y)) }
+  const offset = { x: current.x + shift.x, y: current.y + shift.y }
+  if (Math.hypot(offset.x, offset.y) > cfg.recentreMaxPx) return { error: 'far', shift }
+  return { offset, shift }
 }

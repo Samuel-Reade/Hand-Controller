@@ -73,6 +73,17 @@ export const eyeScenarios: Record<string, () => EyeHarnessFrame[]> = {
    */
   'eye-point': () => frames(30000, (t) => (t < 10000 ? { yaw: 250 / 38, pitch: 120 / 38 } : { yaw: 0, pitch: 0 })),
 
+  /**
+   * Clickless confirm: the eye-point spot, but the gaze hops ±90 px
+   * vertically every 350 ms so the fixation never settles and the ring
+   * stays DASHED; the eyes shut from 4.0 to 5.3 s (past closeConfirmMs).
+   */
+  'eye-close': () => frames(12000, (t) => {
+    const hop = (Math.floor(t / 350) % 2 ? 1 : -1) * (90 / 38)
+    const shut = t >= 4000 && t < 5300 ? 0.9 : 0
+    return { yaw: 250 / 38, pitch: 120 / 38 + (shut ? 0 : hop), blinkL: shut, blinkR: shut }
+  }),
+
   /** a sweep interrupted by a scripted hand engage/pan/release at 6 s */
   'eye-hand-mix': () => {
     const out = frames(16000, (t) => figureEight(t))

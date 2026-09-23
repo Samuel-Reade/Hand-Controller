@@ -7,6 +7,8 @@
 import { button, useControls } from 'leva'
 import { useEffect } from 'react'
 import { EYE } from '../input/eye/config'
+import { voiceControl } from '../input/useVoiceInput'
+import { eyeRecentre } from '../input/useEyeInput'
 import { useStore } from '../store'
 
 type NumKey = { [K in keyof typeof EYE]: (typeof EYE)[K] extends number ? K : never }[keyof typeof EYE]
@@ -41,6 +43,10 @@ export function EyeControls() {
     mode: { value: EYE.mode, options: ['point', 'steer'], onChange: (v: 'point' | 'steer') => { EYE.mode = v }, ...whenEnabled },
     'record 10 s': button(() => { void window.__eyeRecord?.(10, 'clip') }),
     'drill (saccades)': button(() => { void window.__eyeDrill?.() }),
+    're-centre (C)': button(() => { void eyeRecentre() }),
+    recentreSettleMs: slider('recentreSettleMs', 0, 1500, 50),
+    recentreWindowMs: slider('recentreWindowMs', 200, 2000, 50),
+    recentreMaxPx: slider('recentreMaxPx', 100, 900, 25),
     drillStepMs: slider('drillStepMs', 1000, 4000, 250),
     blinkIrisThreshold: slider('blinkIrisThreshold', 0.1, 0.9, 0.05),
     blinkMargin: slider('blinkMargin', 0.05, 0.5, 0.05),
@@ -48,6 +54,7 @@ export function EyeControls() {
     handEveryNWhileEye: slider('handEveryNWhileEye', 1, 4, 1),
     calHeadTurn: { value: EYE.calHeadTurn, onChange: (v: boolean) => { EYE.calHeadTurn = v }, ...whenEnabled },
     calHeadTurnMs: slider('calHeadTurnMs', 2000, 12000, 500),
+    calHeadGainPxPerDeg: slider('calHeadGainPxPerDeg', -1, 120, 1),
     postBlinkFrames: slider('postBlinkFrames', 0, 4, 1),
     foreshortening: { value: EYE.foreshortening, onChange: (v: boolean) => { EYE.foreshortening = v }, ...whenEnabled },
     vergenceMax: slider('vergenceMax', 0.1, 1, 0.05),
@@ -70,6 +77,9 @@ export function EyeControls() {
     pointHoldMs: slider('pointHoldMs', 0, 600, 10),
     pointReleaseFactor: slider('pointReleaseFactor', 1, 3, 0.05),
     pointDwellMs: slider('pointDwellMs', 0, 2500, 50),
+    closeConfirmMs: slider('closeConfirmMs', 0, 3000, 100),
+    closeGraceMs: slider('closeGraceMs', 0, 500, 25),
+    voiceConfirm: { value: EYE.voiceConfirm, onChange: (v: boolean) => { EYE.voiceConfirm = v; voiceControl.sync() }, ...whenEnabled },
     fixationMs: slider('fixationMs', 0, 800, 10),
     fixationMaxMs: slider('fixationMaxMs', 100, 1500, 10),
     learnFromConfirms: { value: EYE.learnFromConfirms, onChange: (v: boolean) => { EYE.learnFromConfirms = v }, ...whenEnabled },
@@ -78,6 +88,8 @@ export function EyeControls() {
     learnMinSamples: slider('learnMinSamples', 4, 12, 1),
     learnOutlierPx: slider('learnOutlierPx', 20, 200, 5),
     fixationRadiusPx: slider('fixationRadiusPx', 10, 200, 5),
+    pointBiasYPx: slider('pointBiasYPx', -200, 200, 5),
+    pointHop: { value: EYE.pointHop, onChange: (v: boolean) => { EYE.pointHop = v }, ...whenEnabled },
     blinkFreeze: { value: EYE.blinkFreeze, onChange: (v: boolean) => { EYE.blinkFreeze = v }, ...whenEnabled },
     calNinePoints: { value: EYE.calNinePoints, onChange: (v: boolean) => { EYE.calNinePoints = v }, ...whenEnabled },
     calPointHoldMs: slider('calPointHoldMs', 800, 4000, 100),

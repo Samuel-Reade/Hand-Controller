@@ -22,6 +22,8 @@ export interface EyeRecording {
   calibration?: Calibration | null
   /** the explicit calibration's samples (features per ring): how each ring READ at calibration time, to diff against the clip */
   calSamples?: CalibrationSample[]
+  /** the re-centre offset in force (px, after the map) */
+  offset?: { x: number; y: number }
 }
 
 export interface ReplayMetrics {
@@ -87,6 +89,7 @@ export function replayRecording(
   const telemetry = createEyeTelemetry()
   const ch = createEyeChannel({ ...cfg, enabled: true, mode: 'point' }, telemetry)
   if (recording.calibration) ch.calibration = recording.calibration
+  if (recording.offset) ch.offset = { ...recording.offset }
   const ctx: EyeContext = {
     viewport: recording.viewport, cameraOn: true, reducedMotion: false, shellOpen: false, pointerIdleMs: Infinity,
   }
