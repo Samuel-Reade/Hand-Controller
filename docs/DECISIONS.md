@@ -102,7 +102,7 @@ One line per choice the spec didn't dictate (or dictated loosely).
 
 ## Environment - out of iCloud (2026-09-02)
 - The project no longer lives on the iCloud-synced Desktop; it sits in the
-  home directory (`~/rally-biz-ui`), which is not synced. The
+  home directory (`~/company_map`), which is not synced. The
   `node_modules -> node_modules.nosync` symlink is retired with it: iCloud
   replaced that symlink with a real directory within minutes of it being
   recreated, then filled the tree with conflict copies (`node_modules 2`,

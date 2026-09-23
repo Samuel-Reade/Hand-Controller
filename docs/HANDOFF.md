@@ -1,6 +1,6 @@
 # Handoff: eye-tracking look selector (2026-09-15)
 
-Paste into a new Claude Code chat opened in /Users/samreade/rally-biz-ui.
+Paste into a new Claude Code chat opened in /Users/samreade/company_map.
 
 ## Who / what
 Sam (they/them) is building Rally's 3D "neural constellation" (React 19 + react-three-fiber,
@@ -96,5 +96,5 @@ fake camera and both models).
    `docs/EYE_ACCURACY_PLAN.md` status.
 
 ## Memory files (auto-loaded next session)
-`~/.claude/projects/-Users-samreade-rally-biz-ui/memory/`: rally-domain, eye-tracking-direction,
+`~/.claude/projects/-Users-samreade-company-map/memory/`: rally-domain, eye-tracking-direction,
 eye-tracking-status - update eye-tracking-status when the state changes.
